@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#5b1fa8">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" href="icon.svg">
+    <title>لوحة المعلم</title>
+
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="locked">
+
+<header class="topbar" id="topbar"></header>
+
+<main class="page">
+    <div class="page-title">
+        <h1>لوحة المعلم</h1>
+        <p id="sub">إدارة الطلاب وتسجيل الحضور</p>
+    </div>
+
+    <div class="toolbar">
+        <input class="input" type="date" id="date" title="اختر اليوم">
+        <input class="input grow" id="search" type="search" placeholder="🔎 ابحث بالاسم أو البريد...">
+        <button class="btn light" id="export" type="button">⬇ تصدير CSV</button>
+        <a class="btn" href="attendance_camera.html">📷 مسح الحضور</a>
+    </div>
+
+    <div class="stats" id="stats"></div>
+
+    <section class="card wide chart-card">
+        <h3>الحاضرون آخر 7 أيام</h3>
+        <div class="chart" id="chart"></div>
+    </section>
+
+    <div class="chips" id="chips"></div>
+
+    <div class="grid" id="list">
+        <div class="empty">جارٍ تحميل قائمة الطلاب...</div>
+    </div>
+</main>
+
+<script src="app.js"></script>
+<script>
+    let students = [];
+    let att = {};                 /* { uid: { "YYYY-MM-DD": {status,time,note} } } */
+    let day = todayKey();
+    let filter = "all";
+    const loaded = { s: false, a: false };
+
+    const FILTERS = [
+        ["all", "الكل"], ["present", "حاضر"], ["absent", "غائب"], ["excused", "بعذر"], ["none", "بدون سجل"]
+    ];
+
+    requireTeacher().then(init);
+
+    function init() {
+        renderTopbar(TEACHER_LINKS, "students", TEACHER_BAR);
+        $("#date").value = day;
+
+        db.ref("students").once("value").then(snap => {
+            snap.forEach(child => {
+                const d = child.val() || {};
+                students.push({ uid: d.uid || child.key, name: d.name || "بدون اسم", email: d.email || "" });
+            });
+            students.sort((a, b) => a.name.localeCompare(b.name, LANG === "en" ? "en" : "ar"));
+            loaded.s = true;
+            render();
+        }).catch(() => { $("#list").innerHTML = `<div class="empty">تعذر تحميل الطلاب</div>`; });
+
+        /* مباشر: أي مسح بالكاميرا يظهر هنا فورًا */
+        db.ref("attendance").on("value", snap => {
+            att = snap.val() || {};
+            loaded.a = true;
+            render();
+        });
+    }
+
+    const rec = (uid, d = day) => (att[uid] || {})[d] || null;
+    const keyOf = r => (r ? statusOf(r) : "none");
+
+    function pctOf(uid, totalDays) {
+        let p = 0, e = 0;
+        Object.values(att[uid] || {}).forEach(r => {
+            const st = statusOf(r);
+            if (st === "present") p++; else if (st === "excused") e++;
+        });
+        const denom = totalDays - e;      /* الغياب بعذر لا يُحتسب ضد الطالب */
+        return denom > 0 ? Math.round(p / denom * 100) : null;
+    }
+
+    function render() {
+        if (!loaded.s || !loaded.a) return;
+
+        $("#sub").textContent = "اليوم المحدد: " + day;
+
+        /* إحصائيات اليوم المحدد */
+        const counts = { present: 0, absent: 0, excused: 0, none: 0 };
+        students.forEach(s => counts[keyOf(rec(s.uid))]++);
+
+        const tile = (n, t) => `<div class="stat"><b>${n}</b><span>${t}</span></div>`;
+        $("#stats").innerHTML =
+            tile(students.length, "إجمالي الطلاب") + tile(counts.present, "حاضر") +
+            tile(counts.absent, "غائب") + tile(counts.excused, "غياب بعذر") + tile(counts.none, "بدون سجل");
+
+        $("#chips").innerHTML = FILTERS.map(([k, t]) =>
+            `<button class="chip ${filter === k ? "on" : ""}" data-f="${k}" type="button">${t}${k === "all" ? " (" + students.length + ")" : " (" + counts[k] + ")"}</button>`
+        ).join("");
+
+        renderChart();
+
+        /* كل الأيام التي سُجّل فيها أي شيء (لحساب نسبة الحضور) */
+        const allDays = new Set();
+        Object.values(att).forEach(o => Object.keys(o || {}).forEach(k => allDays.add(k)));
+
+        const q = $("#search").value.trim().toLowerCase();
+        const shown = students.filter(s =>
+            (filter === "all" || keyOf(rec(s.uid)) === filter) &&
+            (!q || s.name.toLowerCase().includes(q) || s.email.toLowerCase().includes(q)));
+
+        const list = $("#list");
+        if (!shown.length) {
+            list.innerHTML = `<div class="empty">${students.length ? "لا توجد نتائج مطابقة" : "لا يوجد طلاب مسجلون بعد"}</div>`;
+            return;
+        }
+
+        list.innerHTML = shown.map((s, i) => {
+            const r = rec(s.uid);
+            const cur = r ? statusOf(r) : null;
+            const id = encodeURIComponent(s.uid);
+            const eid = escapeHtml(s.uid);
+            const pct = pctOf(s.uid, allDays.size);
+            const pcls = pct === null ? "" : pct >= 75 ? "" : pct >= 50 ? "warn" : "bad";
+
+            const badge = cur
+                ? `<span class="badge ${STATUS[cur].cls}">${STATUS[cur].icon} ${STATUS[cur].label}${r.time ? " · " + escapeHtml(r.time) : ""}</span>`
+                : `<span class="badge off">بدون سجل</span>`;
+
+            const seg = Object.keys(STATUS).map(k =>
+                `<button type="button" class="${cur === k ? "on " + STATUS[k].cls : ""}" data-set="${k}" data-uid="${eid}">${STATUS[k].icon} ${STATUS[k].label}</button>`
+            ).join("") + `<button type="button" class="del" data-del="${eid}" title="حذف السجل" ${r ? "" : "disabled"}>🗑</button>`;
+
+            return `
+            <div class="student" style="animation-delay:${Math.min(i, 12) * 40}ms">
+                <div class="head">
+                    <div class="avatar">${escapeHtml(initial(s.name))}</div>
+                    <div class="info"><h3>${escapeHtml(s.name)}</h3><p>${escapeHtml(s.email)}</p></div>
+                    ${badge}
+                </div>
+                <div class="pct">
+                    <span>نسبة الحضور</span>
+                    <div class="track"><div class="fill ${pcls}" style="width:${pct === null ? 0 : pct}%"></div></div>
+                    <b>${pct === null ? "—" : pct + "%"}</b>
+                </div>
+                <div class="seg">${seg}</div>
+                <div class="actions">
+                    <a class="btn ghost sm" href="attendance.html?id=${id}">إدارة الحضور</a>
+                    <a class="btn ghost sm" href="student.html?id=${id}">البيانات</a>
+                    <a class="btn ghost sm" href="generate.html?id=${id}">QR</a>
+                </div>
+            </div>`;
+        }).join("");
+    }
+
+    function renderChart() {
+        const total = students.length || 1;
+        const days = [];
+        for (let i = 6; i >= 0; i--) {
+            const dt = new Date(day + "T00:00:00");
+            dt.setDate(dt.getDate() - i);
+            days.push(dateKey(dt));
+        }
+        $("#chart").innerHTML = days.map(k => {
+            let n = 0;
+            students.forEach(s => { const r = rec(s.uid, k); if (r && statusOf(r) === "present") n++; });
+            const h = Math.max(Math.round(n / total * 70), 4);      /* الارتفاع بالبكسل، الحد الأقصى 70 */
+            const lbl = new Date(k + "T00:00:00").toLocaleDateString(LANG === "en" ? "en" : "ar", { weekday: "short" });
+            return `<div class="bar ${k === day ? "sel" : ""}"><div class="col"><span class="n">${n}</span><i style="height:${h}px"></i></div><em>${lbl}</em></div>`;
+        }).join("");
+    }
+
+    /* ---------- التفاعلات ---------- */
+    $("#search").addEventListener("input", render);
+
+    $("#date").addEventListener("change", e => {
+        day = e.target.value || todayKey();
+        render();
+    });
+
+    $("#chips").addEventListener("click", e => {
+        const b = e.target.closest("[data-f]");
+        if (b) { filter = b.dataset.f; render(); }
+    });
+
+    $("#list").addEventListener("click", async e => {
+        const setBtn = e.target.closest("[data-set]");
+        const delBtn = e.target.closest("[data-del]");
+        try {
+            if (setBtn) {
+                const uid = setBtn.dataset.uid, status = setBtn.dataset.set;
+                const prev = rec(uid);
+                if (prev && statusOf(prev) === status) return;
+                const d = day;
+                await setStatus(uid, d, status, prev && prev.note ? prev.note : "");
+                toast(`${nameOf(uid)}: ${STATUS[status].label}`, { undo: () => restoreRecord(uid, d, prev) });
+            } else if (delBtn) {
+                const uid = delBtn.dataset.del, prev = rec(uid), d = day;
+                if (!prev) return;
+                if (!(await confirmBox(`حذف سجل ${nameOf(uid)} ليوم ${d}؟`, "حذف"))) return;
+                await removeRecord(uid, d);
+                toast("تم حذف السجل", { undo: () => restoreRecord(uid, d, prev) });
+            }
+        } catch (err) {
+            toast("تعذر الحفظ، تأكد من الصلاحيات والاتصال", { type: "err" });
+        }
+    });
+
+    const nameOf = uid => (students.find(s => s.uid === uid) || {}).name || "الطالب";
+
+    /* ---------- تصدير CSV (يفتح في Excel بالعربي) ---------- */
+    $("#export").addEventListener("click", () => {
+        const safe = v => {
+            let s = String(v ?? "");
+            if (/^[=+\-@]/.test(s)) s = "'" + s;       /* حماية من صيغ Excel */
+            return '"' + s.replace(/"/g, '""') + '"';
+        };
+        const rows = [["الاسم", "البريد", "الحالة", "الوقت", "ملاحظة"].map(tr)];
+        students.forEach(s => {
+            const r = rec(s.uid);
+            rows.push([s.name, s.email, r ? tr(STATUS[statusOf(r)].label) : tr("بدون سجل"), (r && r.time) || "", (r && r.note) || ""]);
+        });
+        const csv = "﻿" + rows.map(r => r.map(safe).join(",")).join("\r\n");
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+        a.download = "attendance-" + day + ".csv";
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    });
+</script>
+</body>
+</html>

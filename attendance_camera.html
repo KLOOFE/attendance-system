@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#5b1fa8">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" href="icon.svg">
+    <title>مسح الحضور بالكاميرا</title>
+
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="locked">
+
+<header class="topbar" id="topbar"></header>
+
+<main class="page">
+    <div class="page-title">
+        <h1>مسح الحضور بالكاميرا</h1>
+        <p>وجّه رمز QR الخاص بالطالب نحو الكاميرا وسيظهر اسمه بشكل كبير بعد تسجيل حضوره</p>
+    </div>
+
+    <div class="scan-layout">
+
+        <section class="card wide">
+            <div class="scanner" id="scanner">
+                <video id="video" playsinline muted></video>
+                <div class="frame"><i></i><i></i><i></i><i></i></div>
+
+                <div class="placeholder" id="placeholder">
+                    <div>
+                        <span class="big">📷</span>
+                        <p id="phText">اضغط «تشغيل الكاميرا» للبدء</p>
+                    </div>
+                </div>
+
+                <!-- نتيجة المسح بحجم كبير (وضع الكشك) -->
+                <div class="kiosk" id="kiosk">
+                    <div class="k-ic" id="kIc"></div>
+                    <div class="k-name" id="kName"></div>
+                    <div class="k-sub" id="kSub"></div>
+                </div>
+            </div>
+
+            <div class="cam-controls">
+                <button class="btn lg" id="toggle" type="button">▶ تشغيل الكاميرا</button>
+                <button class="btn ghost lg" id="full" type="button" title="ملء الشاشة">⛶ ملء الشاشة</button>
+                <select class="input" id="camSel" style="display:none" title="اختيار الكاميرا"></select>
+            </div>
+        </section>
+
+        <aside class="card wide">
+            <div class="today-head">
+                <h3>حضور اليوم</h3>
+                <span class="count-pill" id="cnt">0</span>
+            </div>
+            <ul class="today-list" id="today">
+                <li style="justify-content:center;color:var(--muted)">لا يوجد سجل بعد</li>
+            </ul>
+        </aside>
+
+    </div>
+</main>
+
+<script src="app.js"></script>
+<script>
+    const video = $("#video");
+    const scanner = $("#scanner");
+    const toggle = $("#toggle");
+    const camSel = $("#camSel");
+    const kiosk = $("#kiosk");
+
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+    let stream = null;
+    let scanning = false;
+    let busy = false;
+    let lastCode = "", lastAt = 0, lastScan = 0;
+    let hideTimer;
+
+    requireTeacher().then(() => {
+        renderTopbar(TEACHER_LINKS, "scan", TEACHER_BAR);
+        listenToday();
+    });
+
+    /* ---------- مكتبة قراءة الـ QR (مع مصادر احتياطية) ---------- */
+    const JSQR_SOURCES = [
+        "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js",
+        "https://unpkg.com/jsqr@1.4.0/dist/jsQR.js",
+        "jsQR.js"   /* نسخة محلية اختيارية: ضع الملف بجانب الصفحة */
+    ];
+
+    function loadScript(src) {
+        return new Promise(resolve => {
+            const s = document.createElement("script");
+            s.src = src;
+            s.onload = () => resolve(typeof jsQR !== "undefined");
+            s.onerror = () => resolve(false);
+            document.head.appendChild(s);
+        });
+    }
+
+    async function ensureJsQR() {
+        if (typeof jsQR !== "undefined") return true;
+        for (const src of JSQR_SOURCES) {
+            if (await loadScript(src)) return true;
+        }
+        return false;
+    }
+
+    /* ---------- الكاميرا ---------- */
+    function setPlaceholder(text) {
+        $("#placeholder").style.display = "grid";
+        $("#phText").textContent = text;
+    }
+
+    async function startCamera(deviceId) {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            setPlaceholder("الكاميرا تحتاج رابط آمن (https) أو localhost");
+            return;
+        }
+        if (!(await ensureJsQR())) {
+            setPlaceholder("تعذر تحميل مكتبة قراءة الـ QR. تأكد من الاتصال بالإنترنت ثم حدّث الصفحة");
+            return;
+        }
+
+        try {
+            const video_c = { width: { ideal: 1280 }, height: { ideal: 720 } };
+            if (deviceId) video_c.deviceId = { exact: deviceId }; else video_c.facingMode = "user";
+
+            stream = await navigator.mediaDevices.getUserMedia({ video: video_c, audio: false });
+            video.srcObject = stream;
+            await video.play();
+
+            $("#placeholder").style.display = "none";
+            scanner.classList.add("live");
+            toggle.textContent = "■ إيقاف الكاميرا";
+            toggle.classList.add("danger");
+
+            scanning = true;
+            requestAnimationFrame(tick);
+            loadDevices();
+        } catch (err) {
+            const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+            setPlaceholder(denied
+                ? "تم رفض إذن الكاميرا. اسمح بالوصول من إعدادات المتصفح ثم أعد المحاولة"
+                : "لا يمكن تشغيل الكاميرا: " + (err && err.message ? err.message : err));
+        }
+    }
+
+    function stopStream() {
+        scanning = false;
+        if (stream) stream.getTracks().forEach(t => t.stop());
+        stream = null;
+        video.srcObject = null;
+        scanner.classList.remove("live");
+    }
+
+    function stopCamera() {
+        stopStream();
+        setPlaceholder("تم إيقاف الكاميرا");
+        toggle.textContent = "▶ تشغيل الكاميرا";
+        toggle.classList.remove("danger");
+    }
+
+    /* قائمة الكاميرات (تظهر فقط إذا فيه أكثر من كاميرا) */
+    async function loadDevices() {
+        try {
+            const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput");
+            camSel.innerHTML = devs.map((d, i) =>
+                `<option value="${escapeHtml(d.deviceId)}">${escapeHtml(d.label || "كاميرا " + (i + 1))}</option>`).join("");
+            const cur = stream && stream.getVideoTracks()[0] && stream.getVideoTracks()[0].getSettings().deviceId;
+            if (cur) camSel.value = cur;
+            camSel.style.display = devs.length > 1 ? "" : "none";
+        } catch (e) { /* اختياري */ }
+    }
+
+    camSel.addEventListener("change", () => {
+        stopStream();
+        startCamera(camSel.value);
+    });
+
+    toggle.addEventListener("click", () => (scanning ? stopCamera() : startCamera()));
+
+    $("#full").addEventListener("click", () => {
+        if (document.fullscreenElement) document.exitFullscreen();
+        else if (scanner.requestFullscreen) scanner.requestFullscreen();
+    });
+
+    /* ---------- قراءة الـ QR ---------- */
+    function tick() {
+        if (!scanning) return;
+
+        const now = performance.now();
+        if (video.readyState === video.HAVE_ENOUGH_DATA && !busy && now - lastScan > 120) {
+            lastScan = now;
+
+            const scale = Math.min(1, 1280 / video.videoWidth);
+            canvas.width = Math.round(video.videoWidth * scale);
+            canvas.height = Math.round(video.videoHeight * scale);
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const code = jsQR(img.data, img.width, img.height, { inversionAttempts: "attemptBoth" });
+
+            if (code && code.data) handleCode(code.data);
+        }
+        requestAnimationFrame(tick);
+    }
+
+    async function handleCode(raw) {
+        const uid = extractUid(raw);
+        const now = Date.now();
+
+        /* تجاهل نفس الرمز إذا بقي أمام الكاميرا */
+        if (uid === lastCode && now - lastAt < 4000) return;
+        lastCode = uid;
+        lastAt = now;
+        busy = true;
+
+        try {
+            const r = await markAttendance(uid, "qr");
+
+            if (r.status === "ok") {
+                showKiosk("ok", "✅", r.student.name, "تم تسجيل الحضور · " + r.time);
+                beep(true);
+            } else if (r.status === "updated") {
+                showKiosk("ok", "✅", r.student.name, "تم تحديث حالته إلى حاضر (كانت: " + STATUS[r.from].label + ")");
+                beep(true);
+            } else if (r.status === "dup") {
+                showKiosk("warn", "⚠️", r.student.name, "مسجّل مسبقًا اليوم" + (r.time ? " · " + r.time : ""));
+                beep(false);
+            } else {
+                showKiosk("err", "❌", "رمز غير معروف", "المحتوى: " + String(raw).slice(0, 40));
+                beep(false);
+            }
+        } catch (e) {
+            showKiosk("err", "❌", "حدث خطأ", "تعذر الاتصال بقاعدة البيانات أو لا تملك الصلاحية");
+        }
+
+        busy = false;
+    }
+
+    function showKiosk(type, icon, name, sub) {
+        kiosk.className = "kiosk show " + type;
+        $("#kIc").textContent = icon;
+        $("#kName").textContent = name;
+        $("#kSub").textContent = sub;
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(() => { kiosk.className = "kiosk"; }, 3500);
+    }
+
+    /* ---------- قائمة اليوم (مباشرة) ---------- */
+    let students = {};
+
+    function listenToday() {
+        db.ref("students").once("value").then(snap => {
+            students = snap.val() || {};
+
+            db.ref("attendance").on("value", s => {
+                const d = todayKey();
+                const rows = [];
+                s.forEach(child => {
+                    const r = child.child(d).val();
+                    if (r) rows.push({ uid: child.key, st: statusOf(r), time: r.time || "" });
+                });
+
+                rows.reverse();
+                rows.sort((a, b) => (a.st === "present" ? 0 : 1) - (b.st === "present" ? 0 : 1));
+
+                $("#cnt").textContent = rows.filter(r => r.st === "present").length;
+                const list = $("#today");
+
+                if (!rows.length) {
+                    list.innerHTML = `<li style="justify-content:center;color:var(--muted)">لا يوجد سجل بعد</li>`;
+                    return;
+                }
+
+                list.innerHTML = rows.map(r => {
+                    const name = (students[r.uid] && students[r.uid].name) || "طالب";
+                    return `<li>
+                        <div class="avatar">${escapeHtml(initial(name))}</div>
+                        <div class="nm">${escapeHtml(name)}</div>
+                        <span class="badge ${STATUS[r.st].cls}">${STATUS[r.st].label}</span>
+                        <div class="tm">${escapeHtml(r.time)}</div>
+                    </li>`;
+                }).join("");
+            });
+        });
+    }
+
+    window.addEventListener("beforeunload", () => {
+        if (stream) stream.getTracks().forEach(t => t.stop());
+    });
+</script>
+</body>
+</html>

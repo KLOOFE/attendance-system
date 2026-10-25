@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#5b1fa8">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" href="icon.svg">
+    <title>إدارة حضور الطالب</title>
+
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="locked">
+
+<header class="topbar" id="topbar"></header>
+
+<main class="page">
+    <div class="page-title">
+        <h1>إدارة حضور الطالب</h1>
+        <p>حدّد حاضر أو غائب أو غياب بعذر لأي يوم، أو احذف السجل</p>
+    </div>
+
+    <div class="two" id="content">
+        <section class="card wide">
+            <div class="who">
+                <div class="avatar" id="av">؟</div>
+                <div><h2 id="nm">جارٍ التحميل...</h2><p id="em"></p></div>
+            </div>
+
+            <div class="field">
+                <label for="date">التاريخ</label>
+                <input class="input" type="date" id="date">
+            </div>
+
+            <div class="field">
+                <label for="note">ملاحظة / سبب العذر (اختياري)</label>
+                <input class="input" id="note" maxlength="120" placeholder="مثال: مراجعة مستشفى، ظرف عائلي...">
+            </div>
+
+            <p class="cur" id="cur"></p>
+
+            <div class="status-pick">
+                <button class="pick" data-s="present" type="button"><span>✓</span>حاضر</button>
+                <button class="pick" data-s="absent" type="button"><span>✗</span>غائب</button>
+                <button class="pick" data-s="excused" type="button"><span>✎</span>غياب بعذر</button>
+            </div>
+
+            <button class="btn danger block" id="del" type="button" style="margin-top:14px">🗑 حذف سجل هذا اليوم</button>
+        </section>
+
+        <section class="card wide">
+            <div class="stats" id="stats"></div>
+            <h3>سجل الطالب</h3>
+            <ul class="history" id="history"></ul>
+        </section>
+    </div>
+</main>
+
+<script src="app.js"></script>
+<script>
+    const uid = getParam("id");
+    let student = null;
+    let recs = {};
+    let noteSynced = false;
+
+    requireTeacher().then(init);
+
+    function fail(text) {
+        $("#content").innerHTML = `<section class="card wide center"><div class="icon-badge">🔍</div><h2>${text}</h2>
+            <a class="btn" href="teacher.html">العودة للوحة المعلم</a></section>`;
+    }
+
+    function init() {
+        renderTopbar(TEACHER_LINKS, "students", TEACHER_BAR);
+        $("#date").value = todayKey();
+
+        if (!uid) { fail("لم يتم تحديد الطالب"); return; }
+
+        db.ref("students/" + uid).once("value").then(snap => {
+            if (!snap.exists()) { fail("الطالب غير موجود في قاعدة البيانات"); return; }
+            student = snap.val();
+            $("#av").textContent = initial(student.name);
+            $("#nm").textContent = student.name;
+            $("#em").textContent = student.email || "";
+
+            db.ref("attendance/" + uid).on("value", s => {
+                recs = s.val() || {};
+                if (!noteSynced) { syncNote(); noteSynced = true; }
+                renderAll();
+            });
+        }).catch(() => fail("تعذر تحميل البيانات"));
+    }
+
+    const curDate = () => $("#date").value || todayKey();
+
+    function syncNote() {
+        const r = recs[curDate()];
+        $("#note").value = (r && r.note) || "";
+    }
+
+    function renderAll() {
+        const d = curDate();
+        const r = recs[d];
+        const cur = r ? statusOf(r) : null;
+
+        $("#cur").innerHTML = cur
+            ? `الحالة الحالية لهذا اليوم: <span class="badge ${STATUS[cur].cls}">${STATUS[cur].icon} ${STATUS[cur].label}${r.time ? " · " + escapeHtml(r.time) : ""}</span>`
+            : "لا يوجد سجل لهذا اليوم";
+
+        document.querySelectorAll(".pick").forEach(b => {
+            const k = b.dataset.s;
+            b.className = "pick" + (cur === k ? " on " + STATUS[k].cls : "");
+        });
+        $("#del").disabled = !r;
+
+        /* ملخص */
+        const c = { present: 0, absent: 0, excused: 0 };
+        Object.values(recs).forEach(x => c[statusOf(x)]++);
+        $("#stats").innerHTML =
+            `<div class="stat"><b>${c.present}</b><span>حاضر</span></div>` +
+            `<div class="stat"><b>${c.absent}</b><span>غائب</span></div>` +
+            `<div class="stat"><b>${c.excused}</b><span>بعذر</span></div>`;
+
+        /* السجل */
+        const keys = Object.keys(recs).sort().reverse();
+        $("#history").innerHTML = keys.length ? keys.map(k => {
+            const x = recs[k], st = statusOf(x);
+            return `<li>
+                <div class="hmain"><b>${escapeHtml(k)}</b>${x.note ? `<small>${escapeHtml(x.note)}</small>` : ""}</div>
+                <span class="badge ${STATUS[st].cls}">${STATUS[st].icon} ${STATUS[st].label}</span>
+                <span class="tm">${escapeHtml(x.time || "")}</span>
+                <button class="mini" data-edit="${escapeHtml(k)}" title="تعديل" type="button">✎</button>
+                <button class="mini" data-rm="${escapeHtml(k)}" title="حذف" type="button">🗑</button>
+            </li>`;
+        }).join("") : `<li class="empty-li">لا يوجد سجل بعد</li>`;
+    }
+
+    async function apply(status) {
+        const d = curDate(), prev = recs[d] || null;
+        try {
+            await setStatus(uid, d, status, $("#note").value.trim());
+            toast(`${student.name}: ${STATUS[status].label} (${d})`, { undo: () => restoreRecord(uid, d, prev) });
+        } catch (e) {
+            toast("تعذر الحفظ، تأكد من الصلاحيات والاتصال", { type: "err" });
+        }
+    }
+
+    async function remove(d) {
+        const prev = recs[d];
+        if (!prev) return;
+        if (!(await confirmBox(`حذف سجل ${student.name} ليوم ${d}؟`, "حذف"))) return;
+        try {
+            await removeRecord(uid, d);
+            toast("تم حذف السجل", { undo: () => restoreRecord(uid, d, prev) });
+        } catch (e) {
+            toast("تعذر الحذف", { type: "err" });
+        }
+    }
+
+    document.querySelectorAll(".pick").forEach(b => b.addEventListener("click", () => apply(b.dataset.s)));
+    $("#del").addEventListener("click", () => remove(curDate()));
+    $("#date").addEventListener("change", () => { syncNote(); renderAll(); });
+
+    $("#history").addEventListener("click", e => {
+        const ed = e.target.closest("[data-edit]"), rm = e.target.closest("[data-rm]");
+        if (ed) { $("#date").value = ed.dataset.edit; syncNote(); renderAll(); window.scrollTo({ top: 0, behavior: "smooth" }); }
+        if (rm) remove(rm.dataset.rm);
+    });
+</script>
+</body>
+</html>

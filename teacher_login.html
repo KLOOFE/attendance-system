@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#5b1fa8">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" href="icon.svg">
+    <title>دخول المعلم</title>
+
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar" id="topbar"></header>
+
+<main class="center-page">
+    <form class="card center" id="form" novalidate>
+        <div class="icon-badge">🧑‍🏫</div>
+        <h2>دخول المعلم</h2>
+        <p class="sub">سجّل دخولك لإدارة الطلاب والحضور</p>
+
+        <div class="field">
+            <label for="email">البريد الإلكتروني</label>
+            <input type="email" id="email" dir="ltr" placeholder="teacher@university.edu" autocomplete="username" required>
+        </div>
+
+        <div class="field">
+            <label for="password">كلمة المرور</label>
+            <input type="password" id="password" dir="ltr" placeholder="••••••••" autocomplete="current-password" required>
+        </div>
+
+        <button class="btn block lg" id="btn" type="submit">
+            <span class="spinner"></span>
+            <span>تسجيل الدخول</span>
+        </button>
+
+        <p class="msg" id="msg"></p>
+
+        <p class="link-row"><a href="login.html">دخول الطلاب</a></p>
+    </form>
+</main>
+
+<script src="app.js"></script>
+<script>
+    renderTopbar([{ key: "student", href: "login.html", text: "دخول الطلاب" }], "", { home: "teacher_login.html" });
+
+    const form = $("#form"), btn = $("#btn"), msg = $("#msg");
+
+    if (getParam("denied")) {
+        showMsg(msg, "هذا الحساب ليس حساب معلم. سجّل الدخول بحساب معلم", "err");
+    } else {
+        /* إذا كان المعلم مسجلًا دخوله أصلًا نحوّله مباشرة */
+        auth.onAuthStateChanged(async u => {
+            if (u && await isTeacher(u.uid)) location.href = "teacher.html";
+        });
+    }
+
+    form.addEventListener("submit", async e => {
+        e.preventDefault();
+        hideMsg(msg);
+
+        const email = $("#email").value.trim();
+        const password = $("#password").value;
+        if (!email || !password) { showMsg(msg, "اكتب البريد وكلمة المرور", "err"); return; }
+
+        setLoading(btn, true);
+
+        /* الخطوة 1: تسجيل الدخول في Firebase Authentication */
+        let uid;
+        try {
+            const cred = await auth.signInWithEmailAndPassword(email, password);
+            uid = cred.user.uid;
+        } catch (err) {
+            setLoading(btn, false);
+            showMsg(msg, authError(err), "err");
+            return;
+        }
+
+        /* الخطوة 2: التأكد أن الحساب مضاف كمعلم في teachers/{uid} */
+        let snap;
+        try {
+            snap = await db.ref("teachers/" + uid).once("value");
+        } catch (err) {
+            await auth.signOut();
+            setLoading(btn, false);
+            showMsg(msg, "تم تسجيل الدخول لكن قواعد قاعدة البيانات (Rules) منعت قراءة teachers. راجع القواعد.", "err");
+            return;
+        }
+
+        if (snap.exists()) {
+            location.href = "teacher.html";
+        } else {
+            await auth.signOut();
+            setLoading(btn, false);
+            showUidHelp(uid);
+        }
+    });
+
+    /* يعرض الـ UID بخط ثابت (يميّز I و l) مع زر نسخ، عشان ما تكتبه بيدك */
+    function showUidHelp(uid) {
+        msg.className = "msg show err";
+        msg.innerHTML =
+            `الحساب صحيح لكنه غير مضاف كمعلم.<br>أضف في Realtime Database ← Data:<br>
+             <b>teachers ← (الصق الـ UID) ← true</b>
+             <code id="uidBox" dir="ltr" style="display:block;margin:10px 0;padding:10px;border-radius:10px;background:rgba(0,0,0,.25);font-family:Consolas,'Courier New',monospace;font-size:15px;word-break:break-all;user-select:all">${escapeHtml(uid)}</code>
+             <button class="btn sm" type="button" id="copyUid">📋 نسخ الـ UID</button>
+             <small style="display:block;margin-top:8px;opacity:.85">عدد الأحرف: ${uid.length}</small>`;
+
+        $("#copyUid").addEventListener("click", async () => {
+            try {
+                await navigator.clipboard.writeText(uid);
+                toast("تم نسخ الـ UID، الصقه في خانة Name");
+            } catch (e) {
+                /* إذا منع المتصفح النسخ التلقائي نحدد النص ليتم نسخه بـ Ctrl+C */
+                const r = document.createRange();
+                r.selectNodeContents($("#uidBox"));
+                const s = getSelection();
+                s.removeAllRanges();
+                s.addRange(r);
+                toast("تم تحديد الـ UID، اضغط Ctrl+C");
+            }
+        });
+    }
+</script>
+</body>
+</html>
