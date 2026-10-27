@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>فحص الملفات</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<main class="page">
+    <div class="page-title">
+        <h1>فحص ملفات المشروع</h1>
+        <p>يتأكد أن كل ملف هو النسخة الجديدة وموضوع باسمه الصحيح (احذف هذي الصفحة بعد الانتهاء)</p>
+    </div>
+
+    <section class="card wide">
+        <div class="today-head"><h3>النتيجة</h3><span class="count-pill" id="sum">...</span></div>
+        <ul class="history" id="list" style="max-height:none"></ul>
+    </section>
+</main>
+
+<script>
+    /* كل ملف مع كلمات لازم تكون موجودة فيه (علامات النسخة الجديدة) */
+    const CHECKS = [
+        ["style.css", ["--p-700", ".kiosk", ".toast"]],
+        ["app.js", ["requireTeacher", "renderTopbar", "const STATUS"]],
+        ["login.html", ['id="topbar"', "saveStudent", "teacher_login.html"]],
+        ["register.html", ['id="topbar"', "createUserWithEmailAndPassword"]],
+        ["student.html", ['id="topbar"', "firebase-auth.js", "onAuthStateChanged", "loadHistory"]],
+        ["teacher_login.html", ['id="topbar"', "showUidHelp", "isTeacher"]],
+        ["teacher.html", ['id="topbar"', "requireTeacher", "renderChart", "data-set"]],
+        ["attendance.html", ['id="topbar"', "requireTeacher", "status-pick", "apply("]],
+        ["attendance_camera.html", ['id="topbar"', "requireTeacher", "jsQR", "showKiosk"]],
+        ["generate.html", ['id="topbar"', "requireTeacher", "QRCode"]],
+        ["manifest.json", ["short_name"]],
+        ["sw.js", ["CACHE"]],
+        ["icon.svg", ["<svg"]]
+    ];
+
+    /* علامات النسخة القديمة: لو ظهرت في الملف فهو قديم */
+    const OLD = { "student.html": ["صفحة المعلم"] };
+
+    (async () => {
+        const list = document.getElementById("list");
+        let good = 0;
+
+        for (const [file, markers] of CHECKS) {
+            let state, detail = "";
+            try {
+                const res = await fetch(file + "?v=" + Date.now(), { cache: "no-store" });
+                if (!res.ok) {
+                    state = "bad"; detail = "الملف غير موجود في المجلد";
+                } else {
+                    const text = await res.text();
+                    const missing = markers.filter(m => !text.includes(m));
+                    const old = (OLD[file] || []).filter(m => text.includes(m));
+                    if (missing.length || old.length) {
+                        state = "bad";
+                        detail = "نسخة قديمة أو محتوى خاطئ. " +
+                            (missing.length ? "ينقصه: " + missing.join(" ، ") + ". " : "") +
+                            (old.length ? "فيه بقايا من النسخة القديمة." : "");
+                    } else { state = "ok"; good++; }
+                }
+            } catch (e) { state = "bad"; detail = "تعذر قراءة الملف"; }
+
+            const li = document.createElement("li");
+            li.innerHTML = `<div class="hmain"><b dir="ltr" style="text-align:right"></b><small></small></div>
+                            <span class="badge ${state === "ok" ? "ok" : "bad"}">${state === "ok" ? "✓ سليم" : "✗ يحتاج استبدال"}</span>`;
+            li.querySelector("b").textContent = file;
+            li.querySelector("small").textContent = detail;
+            list.appendChild(li);
+        }
+
+        document.getElementById("sum").textContent = good + " / " + CHECKS.length;
+    })();
+</script>
+</body>
+</html>

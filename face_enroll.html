@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#5b1fa8">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" href="icon.svg">
+    <title>تسجيل الوجوه</title>
+
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="locked">
+
+<header class="topbar" id="topbar"></header>
+
+<main class="page">
+    <div class="page-title">
+        <h1>تسجيل وجوه الطلاب</h1>
+        <p>سجّل بصمة وجه الطالب مرة واحدة ثم يُسجَّل حضوره تلقائيًا بالكاميرا</p>
+    </div>
+
+    <div class="scan-layout">
+
+        <section class="card wide">
+            <div class="scanner" id="scanner">
+                <video id="video" playsinline muted></video>
+                <div class="frame"><i></i><i></i><i></i><i></i></div>
+
+                <div class="placeholder" id="placeholder">
+                    <div>
+                        <span class="big">🧑</span>
+                        <p id="phText">اضغط «تشغيل الكاميرا» ثم «ابدأ التسجيل»</p>
+                    </div>
+                </div>
+
+                <div class="kiosk" id="kiosk">
+                    <div class="k-ic" id="kIc"></div>
+                    <div class="k-name" id="kName"></div>
+                    <div class="k-sub" id="kSub"></div>
+                </div>
+            </div>
+
+            <p class="cur" id="selInfo" style="margin-top:14px">لم يُحدد طالب بعد — اختر طالبًا من القائمة</p>
+
+            <div class="pct">
+                <span id="progTxt" dir="ltr">0 / 5</span>
+                <div class="track"><div class="fill" id="prog" style="width:0"></div></div>
+            </div>
+            <p class="cur" id="hint" style="min-height:26px"></p>
+
+            <label style="display:flex;gap:10px;align-items:flex-start;margin:6px 0 4px;font-size:14px;cursor:pointer">
+                <input type="checkbox" id="consent" style="margin-top:6px;width:18px;height:18px;flex:none">
+                <span>أؤكد موافقة الطالب على حفظ بصمة وجهه الرقمية (أرقام فقط، لا تُحفظ صورة)</span>
+            </label>
+
+            <div class="cam-controls">
+                <button class="btn lg" id="toggle" type="button">▶ تشغيل الكاميرا</button>
+                <button class="btn ghost lg" id="enroll" type="button" disabled>📸 ابدأ التسجيل</button>
+            </div>
+        </section>
+
+        <aside class="card wide">
+            <div class="today-head">
+                <h3>الطلاب</h3>
+                <span class="count-pill" id="cnt" dir="ltr">0</span>
+            </div>
+            <input class="input" id="search" type="search" placeholder="🔎 ابحث بالاسم أو البريد..." style="margin-bottom:12px">
+            <ul class="today-list" id="list">
+                <li style="justify-content:center;color:var(--muted)">جارٍ تحميل قائمة الطلاب...</li>
+            </ul>
+        </aside>
+
+    </div>
+</main>
+
+<script src="app.js"></script>
+<script>
+    const video = $("#video");
+    const scanner = $("#scanner");
+    const toggle = $("#toggle");
+    const enrollBtn = $("#enroll");
+    const kiosk = $("#kiosk");
+
+    const SAMPLES = 5;
+    let stream = null;
+    let students = [];
+    let faces = {};            /* { uid: { d:[128], n, at } } */
+    let selected = null;       /* uid الطالب المحدد */
+    let busy = false;
+    let hideTimer;
+
+    requireTeacher().then(init);
+
+    function init() {
+        renderTopbar(TEACHER_LINKS, "face", TEACHER_BAR);
+
+        db.ref("students").once("value").then(snap => {
+            snap.forEach(c => {
+                const d = c.val() || {};
+                students.push({ uid: d.uid || c.key, name: d.name || "بدون اسم", email: d.email || "" });
+            });
+            students.sort((a, b) => a.name.localeCompare(b.name, LANG === "en" ? "en" : "ar"));
+            renderList();
+        }).catch(() => { $("#list").innerHTML = `<li style="justify-content:center;color:var(--muted)">تعذر تحميل الطلاب</li>`; });
+
+        db.ref("faces").on("value", snap => {
+            faces = {};
+            snap.forEach(c => {
+                const v = c.val();
+                if (v && Array.isArray(v.d) && v.d.length === 128) faces[c.key] = v;
+            });
+            renderList();
+        });
+    }
+
+    /* ---------- قائمة الطلاب ---------- */
+    const nameOf = uid => (students.find(s => s.uid === uid) || {}).name || "الطالب";
+
+    function renderList() {
+        const q = $("#search").value.trim().toLowerCase();
+        const enrolled = students.filter(s => faces[s.uid]).length;
+        $("#cnt").textContent = enrolled + " / " + students.length;
+
+        const all = students.filter(s => !q || s.name.toLowerCase().includes(q) || s.email.toLowerCase().includes(q));
+        const shown = all.slice(0, 100);
+
+        if (!shown.length) {
+            $("#list").innerHTML = `<li style="justify-content:center;color:var(--muted)">${students.length ? "لا توجد نتائج مطابقة" : "لا يوجد طلاب مسجلون بعد"}</li>`;
+            return;
+        }
+
+        $("#list").innerHTML = shown.map(s => {
+            const has = !!faces[s.uid];
+            const eid = escapeHtml(s.uid);
+            return `<li style="${selected === s.uid ? "outline:2px solid var(--p-500)" : ""}">
+                <div class="avatar">${escapeHtml(initial(s.name))}</div>
+                <div class="nm">${escapeHtml(s.name)}</div>
+                <span class="badge ${has ? "ok" : "off"}">${has ? "✓ وجه مسجّل" : "غير مسجّل"}</span>
+                <button class="btn ghost sm" type="button" data-pick="${eid}">تحديد</button>
+                ${has ? `<button class="btn ghost sm" type="button" data-del="${eid}" title="حذف الوجه">🗑</button>` : ""}
+            </li>`;
+        }).join("") + (all.length > shown.length
+            ? `<li style="justify-content:center;color:var(--muted)">اكتب للبحث عن باقي الطلاب</li>` : "");
+    }
+
+    $("#search").addEventListener("input", renderList);
+
+    $("#list").addEventListener("click", async e => {
+        const pick = e.target.closest("[data-pick]");
+        const del = e.target.closest("[data-del]");
+        if (pick) {
+            selected = pick.dataset.pick;
+            $("#selInfo").textContent = "الطالب المحدد: " + nameOf(selected);
+            renderList();
+        } else if (del) {
+            const uid = del.dataset.del;
+            if (!(await confirmBox("حذف وجه " + nameOf(uid) + "؟", "حذف"))) return;
+            try {
+                await db.ref("faces/" + uid).remove();
+                toast("تم حذف الوجه");
+            } catch (err) {
+                toast("تعذر الحذف", { type: "err" });
+            }
+        }
+    });
+
+    /* ---------- الكاميرا ---------- */
+    function setPlaceholder(text) {
+        $("#placeholder").style.display = "grid";
+        $("#phText").textContent = text;
+    }
+
+    async function startCamera() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            setPlaceholder("الكاميرا تحتاج رابط آمن (https) أو localhost");
+            return;
+        }
+        setPlaceholder("جارٍ تحميل نموذج التعرف على الوجه (أول مرة قد تأخذ وقتًا)");
+        if (!(await ensureFaceApi())) {
+            setPlaceholder("تعذر تحميل مكتبة التعرف على الوجه. تأكد من الاتصال بالإنترنت ثم حدّث الصفحة");
+            return;
+        }
+
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({
+                video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" }, audio: false
+            });
+            video.srcObject = stream;
+            await video.play();
+
+            $("#placeholder").style.display = "none";
+            scanner.classList.add("live");
+            toggle.textContent = "■ إيقاف الكاميرا";
+            toggle.classList.add("danger");
+            enrollBtn.disabled = false;
+        } catch (err) {
+            const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+            setPlaceholder(denied
+                ? "تم رفض إذن الكاميرا. اسمح بالوصول من إعدادات المتصفح ثم أعد المحاولة"
+                : "لا يمكن تشغيل الكاميرا: " + (err && err.message ? err.message : err));
+        }
+    }
+
+    function stopCamera() {
+        if (stream) stream.getTracks().forEach(t => t.stop());
+        stream = null;
+        video.srcObject = null;
+        scanner.classList.remove("live");
+        setPlaceholder("تم إيقاف الكاميرا");
+        toggle.textContent = "▶ تشغيل الكاميرا";
+        toggle.classList.remove("danger");
+        enrollBtn.disabled = true;
+    }
+
+    toggle.addEventListener("click", () => (stream ? stopCamera() : startCamera()));
+    window.addEventListener("beforeunload", () => { if (stream) stream.getTracks().forEach(t => t.stop()); });
+
+    /* ---------- التسجيل ---------- */
+    function setProg(n) {
+        $("#progTxt").textContent = n + " / " + SAMPLES;
+        $("#prog").style.width = (n / SAMPLES * 100) + "%";
+    }
+
+    function showKiosk(type, icon, name, sub) {
+        kiosk.className = "kiosk show " + type;
+        $("#kIc").textContent = icon;
+        $("#kName").textContent = name;
+        $("#kSub").textContent = sub;
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(() => { kiosk.className = "kiosk"; }, 2500);
+    }
+
+    enrollBtn.addEventListener("click", async () => {
+        if (busy) return;
+        if (!selected) { toast("اختر طالبًا أولًا", { type: "err" }); return; }
+        if (!$("#consent").checked) { toast("أكّد موافقة الطالب أولًا", { type: "err" }); return; }
+        if (!stream) { toast("شغّل الكاميرا أولًا", { type: "err" }); return; }
+
+        busy = true;
+        enrollBtn.disabled = true;
+        const uid = selected, name = nameOf(uid);
+        const got = [];
+        const t0 = Date.now();
+        setProg(0);
+
+        try {
+            while (got.length < SAMPLES && Date.now() - t0 < 25000) {
+                const res = await faceapi.detectAllFaces(video, faceOpts()).withFaceLandmarks().withFaceDescriptors();
+                if (res.length === 1 && res[0].detection.score >= 0.6) {
+                    got.push(Array.from(res[0].descriptor));
+                    setProg(got.length);
+                    $("#hint").textContent = "حرّك رأسك قليلًا بين كل التقاطة";
+                } else {
+                    $("#hint").textContent = res.length > 1
+                        ? "يوجد أكثر من وجه أمام الكاميرا"
+                        : "ما ظهر وجه واضح، قرّب من الكاميرا وحسّن الإضاءة";
+                }
+                await sleep(700);
+            }
+
+            if (got.length < SAMPLES) {
+                toast("تعذر التقاط العينات، أعد المحاولة", { type: "err" });
+                return;
+            }
+
+            const mean = meanFace(got);
+            if (got.some(d => faceDist(d, mean) > 0.45)) {
+                toast("العينات غير متناسقة، أعد المحاولة بإضاءة أفضل", { type: "err" });
+                return;
+            }
+
+            /* تنبيه إذا كان الوجه قريبًا جدًا من وجه طالب آخر مسجّل */
+            let near = null;
+            Object.keys(faces).forEach(k => {
+                if (k !== uid && faceDist(mean, faces[k].d) < 0.45) near = k;
+            });
+            if (near && !(await confirmBox("هذا الوجه قريب جدًا من وجه " + nameOf(near) + ". هل تريد المتابعة؟", "تأكيد"))) return;
+
+            await db.ref("faces/" + uid).set({ d: packFace(mean), n: got.length, at: Date.now() });
+            showKiosk("ok", "✅", name, "تم حفظ وجه " + name);
+            beep(true);
+            $("#hint").textContent = "";
+        } catch (e) {
+            toast("تعذر الحفظ، تأكد من الصلاحيات والاتصال", { type: "err" });
+        } finally {
+            busy = false;
+            enrollBtn.disabled = !stream;
+        }
+    });
+</script>
+</body>
+</html>

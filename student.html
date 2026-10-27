@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#5b1fa8">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" href="icon.svg">
+    <title>بيانات الطالب</title>
+
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar" id="topbar"></header>
+
+<main class="center-page">
+    <section class="card mid center" id="card">
+        <div class="loader-dots">جارٍ تحميل البيانات...</div>
+    </section>
+</main>
+
+<script src="app.js"></script>
+<script>
+    renderTopbar([], "", { home: "login.html", logout: "تسجيل الخروج", logoutTo: "login.html" });
+
+    const card = $("#card");
+
+    function notFound(text) {
+        card.innerHTML = `
+            <div class="icon-badge">🔍</div>
+            <h2>${text}</h2>
+            <p class="sub">تأكد من الرابط أو سجّل الدخول من جديد</p>
+            <a class="btn" href="login.html">الذهاب لتسجيل الدخول</a>`;
+    }
+
+    /* لازم يكون الطالب مسجل دخوله */
+    auth.onAuthStateChanged(user => {
+        if (!user) { location.href = "login.html"; return; }
+
+        const id = getParam("id") || user.uid;
+        db.ref("students/" + id).once("value").then(snap => {
+            if (!snap.exists()) { notFound("الطالب غير موجود في قاعدة البيانات"); return; }
+            render(snap.val());
+        }).catch(() => notFound("تعذر تحميل البيانات"));
+    });
+
+    function render(s) {
+        card.innerHTML = `
+            <div class="avatar xl">${escapeHtml(initial(s.name))}</div>
+            <h2>${escapeHtml(s.name)}</h2>
+            <p class="sub" style="margin-bottom:0;direction:ltr">${escapeHtml(s.email)}</p>
+
+            <h3 class="section">رمز الحضور (QR)</h3>
+            <p class="sub" style="margin-bottom:10px">أظهر هذا الرمز أمام الكاميرا لتسجيل حضورك</p>
+            <div class="qr-box" id="qr"></div>
+            <button class="btn ghost sm" id="dl" type="button">⬇ تحميل الرمز</button>
+
+            <div class="rows">
+                <div class="row"><span>الاسم</span><b>${escapeHtml(s.name)}</b></div>
+                <div class="row"><span>البريد</span><b class="ltr">${escapeHtml(s.email)}</b></div>
+                <div class="row"><span>المعرّف</span><b class="ltr">${escapeHtml(s.uid)}</b></div>
+            </div>
+
+            <div class="stats" id="stats"></div>
+
+            <h3 class="section" style="text-align:right">سجل الحضور</h3>
+            <ul class="history" id="history"><li class="empty-li">جارٍ التحميل...</li></ul>
+        `;
+
+        new QRCode($("#qr"), {
+            text: s.uid,
+            width: 200,
+            height: 200,
+            colorDark: "#2a0a4d",
+            colorLight: "#ffffff",
+            correctLevel: QRCode.CorrectLevel.M
+        });
+
+        $("#dl").addEventListener("click", () => {
+            const canvas = $("#qr canvas");
+            if (!canvas) return;
+            const a = document.createElement("a");
+            a.href = canvas.toDataURL("image/png");
+            a.download = "qr-" + (s.name || "student") + ".png";
+            a.click();
+        });
+
+        loadHistory(s.uid);
+    }
+
+    function loadHistory(uid) {
+        db.ref("attendance/" + uid).once("value").then(snap => {
+            const items = [];
+            snap.forEach(c => { items.push(Object.assign({ date: c.key }, c.val() || {})); });
+            items.sort((a, b) => b.date.localeCompare(a.date));
+
+            const c = { present: 0, absent: 0, excused: 0 };
+            items.forEach(i => c[statusOf(i)]++);
+            $("#stats").innerHTML =
+                `<div class="stat"><b>${c.present}</b><span>حاضر</span></div>` +
+                `<div class="stat"><b>${c.absent}</b><span>غائب</span></div>` +
+                `<div class="stat"><b>${c.excused}</b><span>بعذر</span></div>`;
+
+            $("#history").innerHTML = items.length ? items.map(i => {
+                const st = statusOf(i);
+                return `<li>
+                    <div class="hmain"><b>${escapeHtml(i.date)}</b>${i.note ? `<small>${escapeHtml(i.note)}</small>` : ""}</div>
+                    <span class="badge ${STATUS[st].cls}">${STATUS[st].icon} ${STATUS[st].label}</span>
+                    <span class="tm">${escapeHtml(i.time || "")}</span>
+                </li>`;
+            }).join("") : `<li class="empty-li">لا يوجد حضور مسجل بعد</li>`;
+        }).catch(() => {
+            $("#history").innerHTML = `<li class="empty-li">تعذر تحميل السجل</li>`;
+        });
+    }
+</script>
+</body>
+</html>
