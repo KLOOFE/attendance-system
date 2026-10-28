@@ -507,52 +507,111 @@ function requireTeacher() {
     });
 }
 
+/* ===== إعدادات الاتصال بالـ Backend ===== */
+const BACKEND_URL = "http://localhost:3000";
+
+/* إرسال طلب موثّق إلى الـ Backend */
+async function backendRequest(endpoint, options = {}) {
+    if (!auth || !auth.currentUser) {
+        throw new Error("يجب تسجيل الدخول أولاً");
+    }
+
+    const token = await auth.currentUser.getIdToken();
+
+    const response = await fetch(`${BACKEND_URL}${endpoint}`, {
+        ...options,
+        headers: {
+            ...(options.headers || {}),
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`
+        }
+    });
+
+    let data;
+
+    try {
+        data = await response.json();
+    } catch {
+        throw new Error("تعذر قراءة استجابة الخادم");
+    }
+
+    if (!response.ok) {
+        throw new Error(
+            data.message || `حدث خطأ: ${response.status}`
+        );
+    }
+
+    return data;
+}
+
 /* ===== عمليات الحضور ===== */
 
 /* تسجيل حضور (QR أو وجه): يرجع status = ok | updated | dup | nostudent | invalid
    updated = كان غائب/بعذر وتحوّل إلى حاضر */
+/* ===== الاتصال بالـ Backend ===== */
 async function markAttendance(uid, method = "manual") {
-    if (!/^[A-Za-z0-9_-]{6,128}$/.test(uid || "")) return { status: "invalid" };
+    if (!/^[A-Za-z0-9_-]{6,128}$/.test(uid || "")) {
+        return { status: "invalid" };
+    }
 
     const sSnap = await db.ref("students/" + uid).once("value");
     if (!sSnap.exists()) return { status: "nostudent" };
     const student = sSnap.val();
-
     const day = todayKey();
-    const record = { status: "present", time: nowTime(), date: day, method: method, note: "" };
-    let previous = null;
-
-    const res = await db.ref(`attendance/${uid}/${day}`).transaction(cur => {
-        if (cur && statusOf(cur) === "present") return;   /* مسجل حاضر مسبقًا: لا نكتب */
-        previous = cur;
-        return record;
-    });
-
-    if (res.committed) {
-        return { status: previous ? "updated" : "ok", student, time: record.time, from: previous ? statusOf(previous) : null };
-    }
-    const old = res.snapshot.val() || {};
-    return { status: "dup", student, time: old.time || "" };
-}
-
-/* تحديد حالة طالب في يوم معين (من جهة المعلم) */
-function setStatus(uid, day, status, note = "") {
-    return db.ref(`attendance/${uid}/${day}`).set({
-        status: status,
+    const record = {
+        status: "present",
+        time: nowTime(),
         date: day,
-        time: status === "present" ? nowTime() : "",
-        method: "teacher",
-        note: note || ""
+        method,
+        note: ""
+    };
+
+    const data = await backendRequest("/api/attendance/" + uid);
+    const previous = (data.attendance || {})[day] || null;
+
+    if (previous && statusOf(previous) === "present") {
+        return { status: "dup", student, time: previous.time || "" };
+    }
+
+    await backendRequest("/api/attendance/" + uid + "/" + day, {
+        method: "PUT",
+        body: JSON.stringify(record)
+    });
+
+    return {
+        status: previous ? "updated" : "ok",
+        student,
+        time: record.time,
+        from: previous ? statusOf(previous) : null
+    };
+}
+
+/* تحديد حالة الطالب عبر Backend */
+async function setStatus(uid, day, status, note = "") {
+    return backendRequest("/api/attendance/" + uid + "/" + day, {
+        method: "PUT",
+        body: JSON.stringify({
+            status,
+            date: day,
+            time: status === "present" ? nowTime() : "",
+            method: "teacher",
+            note: note || ""
+        })
     });
 }
 
-function removeRecord(uid, day) {
-    return db.ref(`attendance/${uid}/${day}`).remove();
+async function removeRecord(uid, day) {
+    return backendRequest("/api/attendance/" + uid + "/" + day, {
+        method: "DELETE"
+    });
 }
 
-/* للتراجع: يعيد السجل السابق أو يحذف إن لم يكن موجودًا */
-function restoreRecord(uid, day, prev) {
-    return prev ? db.ref(`attendance/${uid}/${day}`).set(prev) : removeRecord(uid, day);
+async function restoreRecord(uid, day, prev) {
+    if (!prev) return removeRecord(uid, day);
+    return backendRequest("/api/attendance/" + uid + "/" + day, {
+        method: "PUT",
+        body: JSON.stringify(prev)
+    });
 }
 
 /* استخراج معرف الطالب من محتوى الـ QR (نص مباشر أو رابط فيه id=) */
