@@ -500,3 +500,14 @@ app.listen(PORT, "127.0.0.1", () => {
     console.log(`Backend running at http://localhost:${PORT}`);
 });
 
+// ======================================
+// Global Error Handler
+// ======================================
+app.use((err, req, res, next) => {
+    console.error("Server Error:", err.message);
+
+    res.status(500).json({
+        success: false,
+        message: "Internal server error"
+    });
+});
