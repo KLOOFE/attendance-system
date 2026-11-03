@@ -1,5 +1,4 @@
-﻿
-const express = require("express");
+﻿const express = require("express");
 const cors = require("cors");
 const path = require("path");
 
@@ -25,7 +24,7 @@ try {
     const serviceAccountPath = path.resolve(
         __dirname,
         process.env.FIREBASE_SERVICE_ACCOUNT ||
-            "./firebase-service-account.json"
+        "./firebase-service-account.json"
     );
 
     const serviceAccount = require(serviceAccountPath);
@@ -36,13 +35,35 @@ try {
     });
 
     console.log("Firebase Admin initialized successfully");
+
 } catch (error) {
-    console.error(
-        "Firebase initialization failed:",
-        error.message
+    console.error("Firebase initialization failed:", error.message);
+    process.exit(1);
+}
+
+// ======================================
+// Helper: validate attendance date
+// ======================================
+function isValidDate(day) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+        return false;
+    }
+
+    const [year, month, date] = day.split("-").map(Number);
+
+    if (year < 2000 || year > 2100) {
+        return false;
+    }
+
+    const parsedDate = new Date(
+        Date.UTC(year, month - 1, date)
     );
 
-    process.exit(1);
+    return (
+        parsedDate.getUTCFullYear() === year &&
+        parsedDate.getUTCMonth() === month - 1 &&
+        parsedDate.getUTCDate() === date
+    );
 }
 
 // ======================================
@@ -60,11 +81,15 @@ async function verifyToken(req, res, next) {
             });
         }
 
-        const decodedToken = await getAuth().verifyIdToken(match[1]);
+        const decodedToken = await getAuth().verifyIdToken(
+            match[1],
+            true
+        );
 
         req.user = decodedToken;
 
         next();
+
     } catch (error) {
         return res.status(401).json({
             success: false,
@@ -90,6 +115,7 @@ async function verifyTeacher(req, res, next) {
         }
 
         next();
+
     } catch (error) {
         console.error("Teacher verification failed:", error.message);
 
@@ -136,6 +162,7 @@ app.get("/api/firebase-status", async (req, res) => {
             firebase: "connected",
             teachersDataExists: snapshot.exists()
         });
+
     } catch (error) {
         console.error("Firebase read failed:", error.message);
 
@@ -161,6 +188,7 @@ app.get("/api/auth/verify", verifyToken, async (req, res) => {
             uid: req.user.uid,
             isTeacher: teacherSnapshot.exists()
         });
+
     } catch (error) {
         console.error("Identity verification failed:", error.message);
 
@@ -193,6 +221,7 @@ app.get(
                 count: Object.keys(students).length,
                 students
             });
+
         } catch (error) {
             console.error("Failed to read students:", error.message);
 
@@ -203,6 +232,7 @@ app.get(
         }
     }
 );
+
 // ======================================
 // Get attendance records - teacher only
 // ======================================
@@ -222,6 +252,7 @@ app.get(
                     ? snapshot.val()
                     : {}
             });
+
         } catch (error) {
             console.error("Failed to read attendance:", error.message);
 
@@ -262,8 +293,12 @@ app.get(
                     ? snapshot.val()
                     : {}
             });
+
         } catch (error) {
-            console.error("Failed to read student attendance:", error.message);
+            console.error(
+                "Failed to read student attendance:",
+                error.message
+            );
 
             res.status(500).json({
                 success: false,
@@ -292,7 +327,7 @@ app.put(
                 });
             }
 
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+            if (!isValidDate(day)) {
                 return res.status(400).json({
                     success: false,
                     message: "Invalid date"
@@ -355,6 +390,7 @@ app.put(
                 message: "Attendance updated successfully",
                 record
             });
+
         } catch (error) {
             console.error("Failed to update attendance:", error.message);
 
@@ -384,7 +420,7 @@ app.delete(
                 });
             }
 
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+            if (!isValidDate(day)) {
                 return res.status(400).json({
                     success: false,
                     message: "Invalid date"
@@ -409,6 +445,7 @@ app.delete(
                 success: true,
                 message: "Attendance record deleted"
             });
+
         } catch (error) {
             console.error("Failed to delete attendance:", error.message);
 
@@ -431,12 +468,22 @@ app.use("/api", (req, res) => {
 });
 
 // ======================================
+// Home page
+// ======================================
 app.get("/", (req, res) => {
     res.redirect("/teacher_login.html");
 });
+// Static files
+app.use("/firebase-service-account.json", (req, res) => {
+    res.sendStatus(404);
+});
+
+app.use("/server.js", (req, res) => {
+    res.sendStatus(404);
+});
 
 app.use(express.static(__dirname));
-
+// ======================================
 // Handle other routes
 // ======================================
 app.use((req, res) => {
@@ -450,9 +497,6 @@ app.use((req, res) => {
 // Start server
 // ======================================
 app.listen(PORT, "127.0.0.1", () => {
-    console.log(
-        `Backend running at http://localhost:${PORT}`
-    );
+    console.log(`Backend running at http://localhost:${PORT}`);
 });
-
 

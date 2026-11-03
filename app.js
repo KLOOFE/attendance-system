@@ -507,71 +507,77 @@ function requireTeacher() {
     });
 }
 
-/* ===== إعدادات الاتصال بالـ Backend ===== */
-const BACKEND_URL = "http://localhost:3000";
-
-/* إرسال طلب موثّق إلى الـ Backend */
-async function backendRequest(endpoint, options = {}) {
-    if (!auth || !auth.currentUser) {
-        throw new Error("يجب تسجيل الدخول أولاً");
-    }
-
-    const token = await auth.currentUser.getIdToken();
-
-    const response = await fetch(`${BACKEND_URL}${endpoint}`, {
-        ...options,
-        headers: {
-            ...(options.headers || {}),
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${token}`
-        }
-    });
-
-    let data;
-
-    try {
-        data = await response.json();
-    } catch {
-        throw new Error("تعذر قراءة استجابة الخادم");
-    }
-
-    if (!response.ok) {
-        throw new Error(
-            data.message || `حدث خطأ: ${response.status}`
-        );
-    }
-
-    return data;
-}
-
 /* ===== عمليات الحضور ===== */
 
 /* تسجيل حضور (QR أو وجه): يرجع status = ok | updated | dup | nostudent | invalid
    updated = كان غائب/بعذر وتحوّل إلى حاضر */
-/* ===== الاتصال بالـ Backend ===== */
+   /* ===== الاتصال بالـ Backend ===== */
+async function backendRequest(endpoint, options = {}) {
+if (!auth || !auth.currentUser) {
+throw new Error("يجب تسجيل الدخول أولًا");
+}
+
+
+const token = await auth.currentUser.getIdToken();
+
+const response = await fetch(
+    "http://localhost:3000" + endpoint,
+    {
+        ...options,
+        headers: {
+            "Content-Type": "application/json",
+            ...(options.headers || {}),
+            "Authorization": "Bearer " + token
+        }
+    }
+);
+
+const data = await response.json();
+
+if (!response.ok) {
+    throw new Error(data.message || "فشل الاتصال بالـ Backend");
+}
+
+return data;
+
+
+}
+
 async function markAttendance(uid, method = "manual") {
-    if (!/^[A-Za-z0-9_-]{6,128}$/.test(uid || "")) {
-        return { status: "invalid" };
+if (!/^[A-Za-z0-9_-]{6,128}$/.test(uid || "")) {
+return { status: "invalid" };
+}
+
+
+try {
+    const data = await backendRequest("/api/attendance/" + uid);
+
+    const studentSnapshot = await db.ref("students/" + uid).once("value");
+
+    if (!studentSnapshot.exists()) {
+        return { status: "nostudent" };
     }
 
-    const sSnap = await db.ref("students/" + uid).once("value");
-    if (!sSnap.exists()) return { status: "nostudent" };
-    const student = sSnap.val();
+    const student = studentSnapshot.val();
     const day = todayKey();
+    const attendance = data.attendance || {};
+    const previous = attendance[day] || null;
+
+    if (previous && statusOf(previous) === "present") {
+        return {
+            status: "dup",
+            student,
+            time: previous.time || ""
+        };
+    }
+
     const record = {
         status: "present",
-        time: nowTime(),
         date: day,
+        time: nowTime(),
         method,
         note: ""
     };
-
-    const data = await backendRequest("/api/attendance/" + uid);
-    const previous = (data.attendance || {})[day] || null;
-
-    if (previous && statusOf(previous) === "present") {
-        return { status: "dup", student, time: previous.time || "" };
-    }
 
     await backendRequest("/api/attendance/" + uid + "/" + day, {
         method: "PUT",
@@ -584,35 +590,47 @@ async function markAttendance(uid, method = "manual") {
         time: record.time,
         from: previous ? statusOf(previous) : null
     };
+} catch (error) {
+    console.error("Backend attendance error:", error);
+    throw error;
 }
 
-/* تحديد حالة الطالب عبر Backend */
+
+}
+/* ===== إدارة الحضور عبر Backend ===== */
+
 async function setStatus(uid, day, status, note = "") {
-    return backendRequest("/api/attendance/" + uid + "/" + day, {
+    return backendRequest(`/api/attendance/${uid}/${day}`, {
         method: "PUT",
         body: JSON.stringify({
             status,
             date: day,
-            time: status === "present" ? nowTime() : "",
-            method: "teacher",
-            note: note || ""
+            time: nowTime(),
+            method: "manual",
+            note
         })
     });
 }
 
+/* حذف سجل الحضور */
 async function removeRecord(uid, day) {
-    return backendRequest("/api/attendance/" + uid + "/" + day, {
+    return backendRequest(`/api/attendance/${uid}/${day}`, {
         method: "DELETE"
     });
 }
 
+/* التراجع عن آخر تعديل */
 async function restoreRecord(uid, day, prev) {
-    if (!prev) return removeRecord(uid, day);
-    return backendRequest("/api/attendance/" + uid + "/" + day, {
-        method: "PUT",
-        body: JSON.stringify(prev)
-    });
+    if (prev) {
+        return backendRequest(`/api/attendance/${uid}/${day}`, {
+            method: "PUT",
+            body: JSON.stringify(prev)
+        });
+    }
+
+    return removeRecord(uid, day);
 }
+
 
 /* استخراج معرف الطالب من محتوى الـ QR (نص مباشر أو رابط فيه id=) */
 function extractUid(raw) {
