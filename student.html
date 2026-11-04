@@ -96,7 +96,14 @@
     function loadHistory(uid) {
         db.ref("attendance/" + uid).once("value").then(snap => {
             const items = [];
-            snap.forEach(c => { items.push(Object.assign({ date: c.key }, c.val() || {})); });
+            const isDay = k => /^\d{4}-\d{2}-\d{2}$/.test(k);
+            snap.forEach(c => {
+                if (isDay(c.key)) {                       /* سجل قديم (قبل المقررات) */
+                    items.push(Object.assign({ date: c.key }, c.val() || {}));
+                } else {                                  /* سجلات شعبة */
+                    c.forEach(d => { items.push(Object.assign({ date: d.key }, d.val() || {})); });
+                }
+            });
             items.sort((a, b) => b.date.localeCompare(a.date));
 
             const c = { present: 0, absent: 0, excused: 0 };
@@ -109,7 +116,7 @@
             $("#history").innerHTML = items.length ? items.map(i => {
                 const st = statusOf(i);
                 return `<li>
-                    <div class="hmain"><b>${escapeHtml(i.date)}</b>${i.note ? `<small>${escapeHtml(i.note)}</small>` : ""}</div>
+                    <div class="hmain"><b>${escapeHtml(i.date)}</b>${i.sec ? `<small>${escapeHtml(i.sec)}</small>` : ""}${i.note ? `<small>${escapeHtml(i.note)}</small>` : ""}</div>
                     <span class="badge ${STATUS[st].cls}">${STATUS[st].icon} ${STATUS[st].label}</span>
                     <span class="tm">${escapeHtml(i.time || "")}</span>
                 </li>`;

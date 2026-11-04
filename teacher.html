@@ -26,11 +26,20 @@
     <div class="toolbar">
         <input class="input" type="date" id="date" title="اختر اليوم">
         <input class="input grow" id="search" type="search" placeholder="🔎 ابحث بالاسم أو البريد...">
+        <button class="btn light" id="members" type="button">👥 طلاب الشعبة</button>
+        <button class="btn light" id="endLecture" type="button">📋 إنهاء المحاضرة</button>
         <button class="btn light" id="export" type="button">⬇ تصدير CSV</button>
         <a class="btn" href="attendance_camera.html">📷 مسح الحضور</a>
     </div>
 
     <div class="stats" id="stats"></div>
+
+    <!-- الحرمان: حد الغياب لجميع طلاب الشعبة -->
+    <section class="card wide chart-card" id="limitCard">
+        <h3>⛔ الحرمان من المقرر</h3>
+        <p class="sub" style="margin-bottom:12px">يُحرم الطالب تلقائيًا عند بلوغ هذا العدد من الغيابات (الغياب بعذر لا يُحتسب). يُطبَّق على جميع طلاب الشعبة، ويمكنك حرمان أي طالب أو رفع الحرمان عنه يدويًا</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center" id="limitRow"></div>
+    </section>
 
     <section class="card wide chart-card">
         <h3>الحاضرون آخر 7 أيام</h3>
@@ -46,31 +55,43 @@
 
 <script src="app.js"></script>
 <script>
-    let students = [];
-    let att = {};                 /* { uid: { "YYYY-MM-DD": {status,time,note} } } */
+    let sec = null;               /* الشعبة الحالية (تتحدث مباشرة) */
+    let all = [];                 /* كل الطلاب المسجلين */
+    let att = {};                 /* { uid: { sectionId: { "YYYY-MM-DD": {status,time,note} } } } */
     let day = todayKey();
     let filter = "all";
-    const loaded = { s: false, a: false };
+    const loaded = { s: false, a: false, c: false };
 
     const FILTERS = [
-        ["all", "الكل"], ["present", "حاضر"], ["absent", "غائب"], ["excused", "بعذر"], ["none", "بدون سجل"]
+        ["all", "الكل"], ["present", "حاضر"], ["absent", "غائب"], ["excused", "بعذر"], ["none", "بدون سجل"], ["deprived", "محروم"]
     ];
+    const PRESETS = [3, 4, 5, 6];
 
-    requireTeacher().then(init);
+    requireSection().then(init);
 
-    function init() {
+    function init(s) {
+        sec = s;
         renderTopbar(TEACHER_LINKS, "students", TEACHER_BAR);
         $("#date").value = day;
 
         db.ref("students").once("value").then(snap => {
             snap.forEach(child => {
                 const d = child.val() || {};
-                students.push({ uid: d.uid || child.key, name: d.name || "بدون اسم", email: d.email || "" });
+                all.push({ uid: d.uid || child.key, name: d.name || "بدون اسم", email: d.email || "" });
             });
-            students.sort((a, b) => a.name.localeCompare(b.name, LANG === "en" ? "en" : "ar"));
+            all.sort((a, b) => a.name.localeCompare(b.name, LANG === "en" ? "en" : "ar"));
             loaded.s = true;
             render();
         }).catch(() => { $("#list").innerHTML = `<div class="empty">تعذر تحميل الطلاب</div>`; });
+
+        /* الشعبة نفسها (الحد والأعضاء والحرمان اليدوي) */
+        db.ref("sections/" + sec.id).on("value", snap => {
+            const v = snap.val();
+            if (!v) { location.href = "select_section.html"; return; }
+            sec = Object.assign({ id: sec.id }, v, { label: secLabelOf(v) });
+            loaded.c = true;
+            render();
+        });
 
         /* مباشر: أي مسح بالكاميرا يظهر هنا فورًا */
         db.ref("attendance").on("value", snap => {
@@ -80,12 +101,15 @@
         });
     }
 
-    const rec = (uid, d = day) => (att[uid] || {})[d] || null;
+    const roster = () => all.filter(s => (sec.members || {})[s.uid]);
+    const recsOf = uid => (att[uid] || {})[sec.id] || {};
+    const rec = (uid, d = day) => recsOf(uid)[d] || null;
     const keyOf = r => (r ? statusOf(r) : "none");
+    const depOf = uid => deprivation(absencesOf(recsOf(uid)), sec.limit || 0, (sec.override || {})[uid]);
 
     function pctOf(uid, totalDays) {
         let p = 0, e = 0;
-        Object.values(att[uid] || {}).forEach(r => {
+        Object.values(recsOf(uid)).forEach(r => {
             const st = statusOf(r);
             if (st === "present") p++; else if (st === "excused") e++;
         });
@@ -93,33 +117,68 @@
         return denom > 0 ? Math.round(p / denom * 100) : null;
     }
 
-    function render() {
-        if (!loaded.s || !loaded.a) return;
+    /* ---------- الحد (الحرمان) ---------- */
+    function renderLimit() {
+        const cur = sec.limit || 0;
+        $("#limitRow").innerHTML =
+            `<span style="font-weight:700">الحرمان عند:</span>` +
+            PRESETS.map(n => `<button type="button" class="btn sm ${cur === n ? "" : "ghost"}" data-limit="${n}">${n} غيابات</button>`).join("") +
+            `<input class="input" id="limitIn" type="number" min="1" max="99" placeholder="رقم آخر" style="width:110px" value="${cur && !PRESETS.includes(cur) ? cur : ""}">` +
+            `<button type="button" class="btn sm" id="limitSave">حفظ</button>` +
+            (cur ? `<button type="button" class="btn ghost sm" id="limitClear">إلغاء الحد</button>` : "") +
+            `<span style="color:var(--muted);font-size:14px">${cur ? "الحرمان عند: " + cur + " غيابات" : "لم يُحدد حد للحرمان"}</span>`;
+    }
 
-        $("#sub").textContent = "اليوم المحدد: " + day;
+    async function saveLimit(n) {
+        if (!Number.isInteger(n) || n < 1 || n > 99) { toast("أدخل رقمًا بين 1 و 99", { type: "err" }); return; }
+        try {
+            await db.ref(`sections/${sec.id}/limit`).set(n);
+            toast("تم تحديد الحرمان عند " + n + " غيابات");
+        } catch (e) { toast("تعذر الحفظ، تأكد من الصلاحيات والاتصال", { type: "err" }); }
+    }
+
+    $("#limitRow").addEventListener("click", async e => {
+        const p = e.target.closest("[data-limit]");
+        if (p) { saveLimit(+p.dataset.limit); return; }
+        if (e.target.closest("#limitSave")) { saveLimit(parseInt($("#limitIn").value, 10)); return; }
+        if (e.target.closest("#limitClear")) {
+            try { await db.ref(`sections/${sec.id}/limit`).remove(); toast("تم إلغاء حد الحرمان"); }
+            catch (err) { toast("تعذر الحفظ، تأكد من الصلاحيات والاتصال", { type: "err" }); }
+        }
+    });
+
+    /* ---------- العرض ---------- */
+    function render() {
+        if (!loaded.s || !loaded.a || !loaded.c) return;
+
+        $("#sub").textContent = sec.label + " · اليوم المحدد: " + day;
+        renderLimit();
+
+        const students = roster();
 
         /* إحصائيات اليوم المحدد */
-        const counts = { present: 0, absent: 0, excused: 0, none: 0 };
-        students.forEach(s => counts[keyOf(rec(s.uid))]++);
+        const counts = { present: 0, absent: 0, excused: 0, none: 0, deprived: 0 };
+        students.forEach(s => { counts[keyOf(rec(s.uid))]++; if (depOf(s.uid).deprived) counts.deprived++; });
 
         const tile = (n, t) => `<div class="stat"><b>${n}</b><span>${t}</span></div>`;
         $("#stats").innerHTML =
             tile(students.length, "إجمالي الطلاب") + tile(counts.present, "حاضر") +
-            tile(counts.absent, "غائب") + tile(counts.excused, "غياب بعذر") + tile(counts.none, "بدون سجل");
+            tile(counts.absent, "غائب") + tile(counts.excused, "غياب بعذر") + tile(counts.none, "بدون سجل") +
+            tile(counts.deprived, "محروم");
 
         $("#chips").innerHTML = FILTERS.map(([k, t]) =>
             `<button class="chip ${filter === k ? "on" : ""}" data-f="${k}" type="button">${t}${k === "all" ? " (" + students.length + ")" : " (" + counts[k] + ")"}</button>`
         ).join("");
 
-        renderChart();
+        renderChart(students);
 
-        /* كل الأيام التي سُجّل فيها أي شيء (لحساب نسبة الحضور) */
+        /* كل الأيام التي سُجّل فيها أي شيء في هذه الشعبة (لحساب نسبة الحضور) */
         const allDays = new Set();
-        Object.values(att).forEach(o => Object.keys(o || {}).forEach(k => allDays.add(k)));
+        students.forEach(s => Object.keys(recsOf(s.uid)).forEach(k => allDays.add(k)));
 
         const q = $("#search").value.trim().toLowerCase();
         const shown = students.filter(s =>
-            (filter === "all" || keyOf(rec(s.uid)) === filter) &&
+            (filter === "all" || (filter === "deprived" ? depOf(s.uid).deprived : keyOf(rec(s.uid)) === filter)) &&
             (!q || s.name.toLowerCase().includes(q) || s.email.toLowerCase().includes(q)));
 
         const list = $("#list");
@@ -135,6 +194,7 @@
             const eid = escapeHtml(s.uid);
             const pct = pctOf(s.uid, allDays.size);
             const pcls = pct === null ? "" : pct >= 75 ? "" : pct >= 50 ? "warn" : "bad";
+            const dep = depOf(s.uid);
 
             const badge = cur
                 ? `<span class="badge ${STATUS[cur].cls}">${STATUS[cur].icon} ${STATUS[cur].label}${r.time ? " · " + escapeHtml(r.time) : ""}</span>`
@@ -144,8 +204,10 @@
                 `<button type="button" class="${cur === k ? "on " + STATUS[k].cls : ""}" data-set="${k}" data-uid="${eid}">${STATUS[k].icon} ${STATUS[k].label}</button>`
             ).join("") + `<button type="button" class="del" data-del="${eid}" title="حذف السجل" ${r ? "" : "disabled"}>🗑</button>`;
 
+            const limitTxt = sec.limit ? " / " + sec.limit : "";
+
             return `
-            <div class="student" style="animation-delay:${Math.min(i, 12) * 40}ms">
+            <div class="student" style="animation-delay:${Math.min(i, 12) * 40}ms${dep.deprived ? ";outline:2px solid var(--bad)" : ""}">
                 <div class="head">
                     <div class="avatar">${escapeHtml(initial(s.name))}</div>
                     <div class="info"><h3>${escapeHtml(s.name)}</h3><p>${escapeHtml(s.email)}</p></div>
@@ -156,8 +218,13 @@
                     <div class="track"><div class="fill ${pcls}" style="width:${pct === null ? 0 : pct}%"></div></div>
                     <b>${pct === null ? "—" : pct + "%"}</b>
                 </div>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px;font-size:13px;color:var(--muted)">
+                    <span>الغيابات: <b dir="ltr">${dep.absences}${limitTxt}</b></span>
+                    ${dep.deprived ? `<span class="badge bad">⛔ محروم</span>` : ""}
+                </div>
                 <div class="seg">${seg}</div>
                 <div class="actions">
+                    <button class="btn ${dep.deprived ? "ghost" : "danger"} sm" type="button" data-dep="${eid}">${dep.deprived ? "↩ إلغاء الحرمان" : "⛔ حرمان"}</button>
                     <a class="btn ghost sm" href="attendance.html?id=${id}">إدارة الحضور</a>
                     <a class="btn ghost sm" href="student.html?id=${id}">البيانات</a>
                     <a class="btn ghost sm" href="generate.html?id=${id}">QR</a>
@@ -166,7 +233,7 @@
         }).join("");
     }
 
-    function renderChart() {
+    function renderChart(students) {
         const total = students.length || 1;
         const days = [];
         for (let i = 6; i >= 0; i--) {
@@ -196,30 +263,106 @@
         if (b) { filter = b.dataset.f; render(); }
     });
 
+    const nameOf = uid => (all.find(s => s.uid === uid) || {}).name || "الطالب";
+
     $("#list").addEventListener("click", async e => {
         const setBtn = e.target.closest("[data-set]");
         const delBtn = e.target.closest("[data-del]");
+        const depBtn = e.target.closest("[data-dep]");
         try {
             if (setBtn) {
                 const uid = setBtn.dataset.uid, status = setBtn.dataset.set;
                 const prev = rec(uid);
                 if (prev && statusOf(prev) === status) return;
                 const d = day;
-                await setStatus(uid, d, status, prev && prev.note ? prev.note : "");
-                toast(`${nameOf(uid)}: ${STATUS[status].label}`, { undo: () => restoreRecord(uid, d, prev) });
+                await setStatus(uid, sec.id, d, status, prev && prev.note ? prev.note : "", sec.label);
+                toast(`${nameOf(uid)}: ${STATUS[status].label}`, { undo: () => restoreRecord(uid, sec.id, d, prev) });
             } else if (delBtn) {
                 const uid = delBtn.dataset.del, prev = rec(uid), d = day;
                 if (!prev) return;
                 if (!(await confirmBox(`حذف سجل ${nameOf(uid)} ليوم ${d}؟`, "حذف"))) return;
-                await removeRecord(uid, d);
-                toast("تم حذف السجل", { undo: () => restoreRecord(uid, d, prev) });
+                await removeRecord(uid, sec.id, d);
+                toast("تم حذف السجل", { undo: () => restoreRecord(uid, sec.id, d, prev) });
+            } else if (depBtn) {
+                const uid = depBtn.dataset.dep, dep = depOf(uid);
+                const prevOverride = (sec.override || {})[uid] || null;
+                await setDeprived(sec.id, uid, !dep.deprived, dep.auto);
+                toast(`${dep.deprived ? "تم رفع الحرمان عن" : "تم حرمان"} ${nameOf(uid)}`, { undo: () => restoreOverride(sec.id, uid, prevOverride) });
             }
         } catch (err) {
             toast("تعذر الحفظ، تأكد من الصلاحيات والاتصال", { type: "err" });
         }
     });
 
-    const nameOf = uid => (students.find(s => s.uid === uid) || {}).name || "الطالب";
+    /* ---------- إنهاء المحاضرة: غياب لكل من لم يُسجَّل حضوره ---------- */
+    $("#endLecture").addEventListener("click", async () => {
+        const missing = roster().filter(s => !rec(s.uid));
+        if (!missing.length) { toast("الجميع مسجَّل في هذا اليوم"); return; }
+        if (!(await confirmBox(`سيُسجَّل غياب ${missing.length} طلاب لم يُسجَّل حضورهم ليوم ${day}`, "تأكيد الغياب"))) return;
+
+        const now = {};
+        missing.forEach(s => {
+            now[`${s.uid}/${sec.id}/${day}`] = { status: "absent", date: day, time: "", method: "auto", note: "", sec: sec.label };
+        });
+        try {
+            await db.ref("attendance").update(now);
+            toast("تم تسجيل الغياب لـ " + missing.length, {
+                undo: () => db.ref("attendance").update(Object.fromEntries(Object.keys(now).map(k => [k, null])))
+            });
+        } catch (err) {
+            toast("تعذر الحفظ، تأكد من الصلاحيات والاتصال", { type: "err" });
+        }
+    });
+
+    /* ---------- طلاب الشعبة (إضافة وإزالة) ---------- */
+    $("#members").addEventListener("click", () => {
+        const m = document.createElement("div");
+        m.className = "modal";
+        m.innerHTML = `<div class="modal-card" style="max-width:520px;text-align:right">
+            <h3 style="margin:0 0 4px">طلاب الشعبة</h3>
+            <p class="sub" style="margin:0 0 12px;color:var(--muted)">اختر الطلاب الذين يدرسون في هذه الشعبة</p>
+            <input class="input" id="mSearch" type="search" placeholder="🔎 ابحث بالاسم أو البريد..." style="margin-bottom:10px">
+            <div id="mList" style="max-height:46vh;overflow:auto"></div>
+            <div class="modal-actions">
+                <button class="btn ghost" id="mAll" type="button">إضافة الكل</button>
+                <button class="btn" id="mClose" type="button">إغلاق</button>
+            </div></div>`;
+        document.body.appendChild(m);
+
+        const draw = () => {
+            const q = m.querySelector("#mSearch").value.trim().toLowerCase();
+            const rows = all.filter(s => !q || s.name.toLowerCase().includes(q) || s.email.toLowerCase().includes(q)).slice(0, 200);
+            m.querySelector("#mList").innerHTML = rows.map(s => `
+                <label style="display:flex;align-items:center;gap:10px;padding:8px 6px;border-bottom:1px dashed var(--line);cursor:pointer">
+                    <input type="checkbox" data-m="${escapeHtml(s.uid)}" ${(sec.members || {})[s.uid] ? "checked" : ""} style="width:18px;height:18px">
+                    <span style="flex:1;font-weight:700">${escapeHtml(s.name)}</span>
+                    <small dir="ltr" style="color:var(--muted)">${escapeHtml(s.email)}</small>
+                </label>`).join("") || `<p style="text-align:center;color:var(--muted)">لا توجد نتائج مطابقة</p>`;
+        };
+        draw();
+
+        m.querySelector("#mSearch").addEventListener("input", draw);
+        m.querySelector("#mList").addEventListener("change", async e => {
+            const c = e.target.closest("[data-m]");
+            if (!c) return;
+            try {
+                const ref = db.ref(`sections/${sec.id}/members/${c.dataset.m}`);
+                await (c.checked ? ref.set(true) : ref.remove());
+            } catch (err) {
+                c.checked = !c.checked;
+                toast("تعذر الحفظ، تأكد من الصلاحيات والاتصال", { type: "err" });
+            }
+        });
+        m.querySelector("#mAll").addEventListener("click", async () => {
+            const up = {};
+            all.forEach(s => { up[`sections/${sec.id}/members/${s.uid}`] = true; });
+            try { await db.ref().update(up); draw(); toast("تم حفظ"); }
+            catch (err) { toast("تعذر الحفظ، تأكد من الصلاحيات والاتصال", { type: "err" }); }
+        });
+        const close = () => m.remove();
+        m.querySelector("#mClose").addEventListener("click", close);
+        m.addEventListener("click", e => { if (e.target === m) close(); });
+    });
 
     /* ---------- تصدير CSV (يفتح في Excel بالعربي) ---------- */
     $("#export").addEventListener("click", () => {
@@ -228,15 +371,16 @@
             if (/^[=+\-@]/.test(s)) s = "'" + s;       /* حماية من صيغ Excel */
             return '"' + s.replace(/"/g, '""') + '"';
         };
-        const rows = [["الاسم", "البريد", "الحالة", "الوقت", "ملاحظة"].map(tr)];
-        students.forEach(s => {
-            const r = rec(s.uid);
-            rows.push([s.name, s.email, r ? tr(STATUS[statusOf(r)].label) : tr("بدون سجل"), (r && r.time) || "", (r && r.note) || ""]);
+        const rows = [["الاسم", "البريد", "الحالة", "الوقت", "ملاحظة", "الغيابات", "الحرمان"].map(tr)];
+        roster().forEach(s => {
+            const r = rec(s.uid), dep = depOf(s.uid);
+            rows.push([s.name, s.email, r ? tr(STATUS[statusOf(r)].label) : tr("بدون سجل"), (r && r.time) || "", (r && r.note) || "",
+                dep.absences, dep.deprived ? tr("محروم") : ""]);
         });
         const csv = "﻿" + rows.map(r => r.map(safe).join(",")).join("\r\n");
         const a = document.createElement("a");
         a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-        a.download = "attendance-" + day + ".csv";
+        a.download = "attendance-" + sec.course + "-" + sec.section + "-" + day + ".csv";
         a.click();
         setTimeout(() => URL.revokeObjectURL(a.href), 2000);
     });

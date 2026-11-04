@@ -202,8 +202,6 @@ const EN = {
     "ابدأ التسجيل": "Start enrollment",
     "اضغط «تشغيل الكاميرا» ثم «ابدأ التسجيل»": "Press \"Start camera\" then \"Start enrollment\"",
     "حرّك رأسك قليلًا بين كل التقاطة": "Move your head slightly between captures",
-    "تم التقاط": "Captured",
-    "من": "of",
     "ما ظهر وجه واضح، قرّب من الكاميرا وحسّن الإضاءة": "No clear face found. Move closer and improve the lighting",
     "يوجد أكثر من وجه أمام الكاميرا": "More than one face in front of the camera",
     "تعذر التقاط العينات، أعد المحاولة": "Could not capture the samples, try again",
@@ -233,6 +231,67 @@ const EN = {
     "وجه غير معروف": "Unknown face",
     "جارٍ البحث عن وجه...": "Looking for a face...",
     "الطالب غير موجود": "Student not found",
+
+    /* المقررات والشعب والحرمان */
+    "اختيار المقرر والشعبة": "Choose Course & Section",
+    "اختر مقررك ليبدأ التحضير مباشرة، أو أضف مقررًا جديدًا": "Pick your course to start taking attendance right away, or add a new course",
+    "مقرراتي": "My courses",
+    "لا توجد مقررات بعد. أضف أول مقرر من النموذج": "No courses yet. Add your first course using the form",
+    "إضافة مقرر وشعبة": "Add a course & section",
+    "اسم المقرر": "Course name",
+    "مثال: برمجة 1": "e.g. Programming 1",
+    "رقم أو اسم الشعبة": "Section number or name",
+    "مثال: 12": "e.g. 12",
+    "إضافة كل الطلاب المسجّلين لهذه الشعبة": "Add all registered students to this section",
+    "إنشاء وبدء التحضير": "Create & start attendance",
+    "اكتب اسم المقرر ورقم الشعبة": "Enter the course name and section",
+    "تعذر الإنشاء، تأكد من الصلاحيات والاتصال": "Could not create. Check permissions and connection",
+    "تعذر تحميل المقررات": "Could not load courses",
+    "ابدأ التحضير": "Start attendance",
+    "لوحة المعلم للشعبة": "Section dashboard",
+    "شعبة": "Section",
+    "الشعبة": "the section",
+    "الطلاب:": "Students:",
+    "الغيابات:": "Absences:",
+    "تغيير المقرر والشعبة": "Change course & section",
+    "الشعبة ما فيها طلاب. أضفهم من لوحة المعلم ← «طلاب الشعبة»": "This section has no students. Add them from the Teacher Dashboard → \"Section students\"",
+    "ليس مسجّلاً في هذه الشعبة": "Not enrolled in this section",
+    "محروم": "Deprived",
+    "⛔ محروم من المقرر": "⛔ Deprived from the course",
+    "حرمان": "Deprive",
+    "إلغاء الحرمان": "Remove deprivation",
+    "الحرمان": "Deprivation",
+    "الحرمان من المقرر": "Course deprivation",
+    "يُحرم الطالب تلقائيًا عند بلوغ هذا العدد من الغيابات (الغياب بعذر لا يُحتسب). يُطبَّق على جميع طلاب الشعبة، ويمكنك حرمان أي طالب أو رفع الحرمان عنه يدويًا": "A student is deprived automatically when reaching this number of absences (excused absences don't count). It applies to all students in the section, and you can deprive or reinstate any student manually",
+    "الحرمان عند:": "Deprivation at:",
+    "غيابات": "absences",
+    "غياب": "absence",
+    "لم يُحدد حد للحرمان": "No deprivation limit set",
+    "رقم آخر": "Other number",
+    "حفظ": "Save",
+    "إلغاء الحد": "Remove limit",
+    "أدخل رقمًا بين 1 و 99": "Enter a number between 1 and 99",
+    "تم تحديد الحرمان عند": "Deprivation set at",
+    "تم إلغاء حد الحرمان": "Deprivation limit removed",
+    "طلاب الشعبة": "Section students",
+    "إنهاء المحاضرة": "End lecture",
+    "تسجيل الغياب لمن لم يحضر": "Mark absent for those who didn't attend",
+    "الجميع مسجَّل في هذا اليوم": "Everyone is already recorded for this day",
+    "سيُسجَّل غياب": "Absence will be recorded for",
+    "طلاب لم يُسجَّل حضورهم ليوم": "students with no attendance recorded for",
+    "تم تسجيل الغياب لـ": "Absence recorded for",
+    "تأكيد الغياب": "Confirm absence",
+    "إضافة الكل": "Add all",
+    "إغلاق": "Close",
+    "اختر الطلاب الذين يدرسون في هذه الشعبة": "Select the students enrolled in this section",
+    "تم حفظ": "Saved",
+    "الحاضرون": "Present",
+    "حرمان الطالب": "Deprive student",
+    "تم حرمان": "Deprived",
+    "تم رفع الحرمان عن": "Deprivation removed for",
+    "المقرر": "Course",
+    "الغيابات": "Absences",
+    "حالة الحرمان": "Deprivation status",
 
     /* ألفاظ مفردة تأتي مركّبة مع أسماء/أرقام */
     "الكاميرا": "the camera",
@@ -420,6 +479,7 @@ function renderTopbar(links = [], active = "", opts = {}) {
     el.innerHTML = `
         <a class="brand" href="${opts.home || "login.html"}"><span class="logo">${logo}</span> ${escapeHtml(APP_NAME)}</a>
         <nav class="nav">
+            ${opts.logout && getSecLabel() ? `<a href="select_section.html" title="تغيير المقرر والشعبة">📚 ${escapeHtml(getSecLabel())}</a>` : ""}
             ${links.map(l => `<a href="${l.href}" class="${l.key === active ? "active" : ""}">${l.text}</a>`).join("")}
             ${opts.logout ? `<a href="#" id="logoutBtn">${opts.logout}</a>` : ""}
             <button class="lang-btn" id="langBtn" title="Language" type="button">${LANG === "en" ? "عربي" : "EN"}</button>
@@ -507,52 +567,105 @@ function requireTeacher() {
     });
 }
 
+/* ===== المقرر والشعبة =====
+   sections/{id} = { course, section, teacher, limit, members:{uid:true}, override:{uid:"deprived"|"allowed"} }
+   الحضور يُحفظ في: attendance/{uid}/{sectionId}/{YYYY-MM-DD} */
+function getSid() { try { return localStorage.getItem("sid") || ""; } catch (e) { return ""; } }
+function getSecLabel() { try { return localStorage.getItem("sname") || ""; } catch (e) { return ""; } }
+const secLabelOf = v => v.course + " · شعبة " + v.section;
+
+function setSection(id, label) {
+    try { localStorage.setItem("sid", id); localStorage.setItem("sname", label); } catch (e) { /* اختياري */ }
+}
+
+/* صفحات المعلم التي تحتاج مقررًا محددًا: إذا ما اختار يروح لصفحة الاختيار */
+async function requireSection() {
+    const user = await requireTeacher();
+    const sid = getSid();
+    const back = () => { location.href = "select_section.html"; return new Promise(() => {}); };
+    if (!sid) return back();
+    let snap;
+    try { snap = await db.ref("sections/" + sid).once("value"); } catch (e) { return back(); }
+    const v = snap.val();
+    if (!v || v.teacher !== user.uid) return back();
+    const sec = Object.assign({ id: sid }, v, { label: secLabelOf(v) });
+    setSection(sid, sec.label);
+    return sec;
+}
+
+/* ===== الحرمان =====
+   يُحرم الطالب تلقائيًا إذا بلغ عدد غياباته الحد المحدد للشعبة (الغياب بعذر لا يُحتسب)،
+   وللمعلم أن يحرم أي طالب أو يرفع عنه الحرمان يدويًا (override) */
+const absencesOf = recs => Object.values(recs || {}).filter(r => statusOf(r) === "absent").length;
+
+function deprivation(absences, limit, override) {
+    const auto = !!limit && absences >= limit;
+    const deprived = override === "deprived" ? true : override === "allowed" ? false : auto;
+    return { auto, deprived, manual: !!override, absences };
+}
+
+/* want = هل نبي الطالب محروم؟ إذا يطابق الحالة التلقائية نحذف الـ override */
+function setDeprived(sid, uid, want, auto) {
+    const ref = db.ref(`sections/${sid}/override/${uid}`);
+    return want === auto ? ref.remove() : ref.set(want ? "deprived" : "allowed");
+}
+
+function restoreOverride(sid, uid, prev) {
+    const ref = db.ref(`sections/${sid}/override/${uid}`);
+    return prev ? ref.set(prev) : ref.remove();
+}
+
 /* ===== عمليات الحضور ===== */
 
-/* تسجيل حضور (QR أو وجه): يرجع status = ok | updated | dup | nostudent | invalid
+/* تسجيل حضور (QR أو وجه) في شعبة: يرجع status = ok | updated | dup | nostudent | notmember | invalid
    updated = كان غائب/بعذر وتحوّل إلى حاضر */
-async function markAttendance(uid, method = "manual") {
-    if (!/^[A-Za-z0-9_-]{6,128}$/.test(uid || "")) return { status: "invalid" };
+async function markAttendance(uid, method = "manual", sec) {
+    if (!sec || !/^[A-Za-z0-9_-]{6,128}$/.test(uid || "")) return { status: "invalid" };
 
     const sSnap = await db.ref("students/" + uid).once("value");
     if (!sSnap.exists()) return { status: "nostudent" };
     const student = sSnap.val();
 
+    const mSnap = await db.ref(`sections/${sec.id}/members/${uid}`).once("value");
+    if (!mSnap.exists()) return { status: "notmember", student, uid };
+
     const day = todayKey();
-    const record = { status: "present", time: nowTime(), date: day, method: method, note: "" };
+    const record = { status: "present", time: nowTime(), date: day, method: method, note: "", sec: sec.label };
     let previous = null;
 
-    const res = await db.ref(`attendance/${uid}/${day}`).transaction(cur => {
+    const res = await db.ref(`attendance/${uid}/${sec.id}/${day}`).transaction(cur => {
         if (cur && statusOf(cur) === "present") return;   /* مسجل حاضر مسبقًا: لا نكتب */
         previous = cur;
         return record;
     });
 
     if (res.committed) {
-        return { status: previous ? "updated" : "ok", student, time: record.time, from: previous ? statusOf(previous) : null };
+        return { status: previous ? "updated" : "ok", uid, student, time: record.time, from: previous ? statusOf(previous) : null };
     }
     const old = res.snapshot.val() || {};
-    return { status: "dup", student, time: old.time || "" };
+    return { status: "dup", uid, student, time: old.time || "" };
 }
 
 /* تحديد حالة طالب في يوم معين (من جهة المعلم) */
-function setStatus(uid, day, status, note = "") {
-    return db.ref(`attendance/${uid}/${day}`).set({
+function setStatus(uid, sid, day, status, note = "", label = "") {
+    const rec = {
         status: status,
         date: day,
         time: status === "present" ? nowTime() : "",
         method: "teacher",
         note: note || ""
-    });
+    };
+    if (label) rec.sec = label;
+    return db.ref(`attendance/${uid}/${sid}/${day}`).set(rec);
 }
 
-function removeRecord(uid, day) {
-    return db.ref(`attendance/${uid}/${day}`).remove();
+function removeRecord(uid, sid, day) {
+    return db.ref(`attendance/${uid}/${sid}/${day}`).remove();
 }
 
 /* للتراجع: يعيد السجل السابق أو يحذف إن لم يكن موجودًا */
-function restoreRecord(uid, day, prev) {
-    return prev ? db.ref(`attendance/${uid}/${day}`).set(prev) : removeRecord(uid, day);
+function restoreRecord(uid, sid, day, prev) {
+    return prev ? db.ref(`attendance/${uid}/${sid}/${day}`).set(prev) : removeRecord(uid, sid, day);
 }
 
 /* استخراج معرف الطالب من محتوى الـ QR (نص مباشر أو رابط فيه id=) */

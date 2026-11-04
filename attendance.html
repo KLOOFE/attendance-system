@@ -20,7 +20,7 @@
 <main class="page">
     <div class="page-title">
         <h1>إدارة حضور الطالب</h1>
-        <p>حدّد حاضر أو غائب أو غياب بعذر لأي يوم، أو احذف السجل</p>
+        <p id="subtitle">حدّد حاضر أو غائب أو غياب بعذر لأي يوم، أو احذف السجل</p>
     </div>
 
     <div class="two" id="content">
@@ -52,6 +52,7 @@
         </section>
 
         <section class="card wide">
+            <div id="depBox" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px"></div>
             <div class="stats" id="stats"></div>
             <h3>سجل الطالب</h3>
             <ul class="history" id="history"></ul>
@@ -63,18 +64,21 @@
 <script>
     const uid = getParam("id");
     let student = null;
+    let sec = null;
     let recs = {};
     let noteSynced = false;
 
-    requireTeacher().then(init);
+    requireSection().then(init);
 
     function fail(text) {
         $("#content").innerHTML = `<section class="card wide center"><div class="icon-badge">🔍</div><h2>${text}</h2>
             <a class="btn" href="teacher.html">العودة للوحة المعلم</a></section>`;
     }
 
-    function init() {
+    function init(s) {
+        sec = s;
         renderTopbar(TEACHER_LINKS, "students", TEACHER_BAR);
+        $("#subtitle").textContent = sec.label + " · حدّد حاضر أو غائب أو غياب بعذر لأي يوم، أو احذف السجل";
         $("#date").value = todayKey();
 
         if (!uid) { fail("لم يتم تحديد الطالب"); return; }
@@ -86,7 +90,12 @@
             $("#nm").textContent = student.name;
             $("#em").textContent = student.email || "";
 
-            db.ref("attendance/" + uid).on("value", s => {
+            db.ref(`sections/${sec.id}`).on("value", v => {
+                if (v.exists()) sec = Object.assign({ id: sec.id }, v.val(), { label: secLabelOf(v.val()) });
+                renderAll();
+            });
+
+            db.ref(`attendance/${uid}/${sec.id}`).on("value", s => {
                 recs = s.val() || {};
                 if (!noteSynced) { syncNote(); noteSynced = true; }
                 renderAll();
@@ -116,6 +125,22 @@
         });
         $("#del").disabled = !r;
 
+        /* الحرمان */
+        const dep = deprivation(absencesOf(recs), sec.limit || 0, (sec.override || {})[uid]);
+        $("#depBox").innerHTML =
+            `<span>الغيابات: <b dir="ltr">${dep.absences}${sec.limit ? " / " + sec.limit : ""}</b></span>` +
+            (dep.deprived ? `<span class="badge bad">⛔ محروم من المقرر</span>` : "") +
+            `<button class="btn ${dep.deprived ? "ghost" : "danger"} sm" type="button" id="depBtn">${dep.deprived ? "↩ إلغاء الحرمان" : "⛔ حرمان الطالب"}</button>`;
+        $("#depBtn").onclick = async () => {
+            const prevOverride = (sec.override || {})[uid] || null;
+            try {
+                await setDeprived(sec.id, uid, !dep.deprived, dep.auto);
+                toast(`${dep.deprived ? "تم رفع الحرمان عن" : "تم حرمان"} ${student.name}`, { undo: () => restoreOverride(sec.id, uid, prevOverride) });
+            } catch (e) {
+                toast("تعذر الحفظ، تأكد من الصلاحيات والاتصال", { type: "err" });
+            }
+        };
+
         /* ملخص */
         const c = { present: 0, absent: 0, excused: 0 };
         Object.values(recs).forEach(x => c[statusOf(x)]++);
@@ -141,8 +166,8 @@
     async function apply(status) {
         const d = curDate(), prev = recs[d] || null;
         try {
-            await setStatus(uid, d, status, $("#note").value.trim());
-            toast(`${student.name}: ${STATUS[status].label} (${d})`, { undo: () => restoreRecord(uid, d, prev) });
+            await setStatus(uid, sec.id, d, status, $("#note").value.trim(), sec.label);
+            toast(`${student.name}: ${STATUS[status].label} (${d})`, { undo: () => restoreRecord(uid, sec.id, d, prev) });
         } catch (e) {
             toast("تعذر الحفظ، تأكد من الصلاحيات والاتصال", { type: "err" });
         }
@@ -153,8 +178,8 @@
         if (!prev) return;
         if (!(await confirmBox(`حذف سجل ${student.name} ليوم ${d}؟`, "حذف"))) return;
         try {
-            await removeRecord(uid, d);
-            toast("تم حذف السجل", { undo: () => restoreRecord(uid, d, prev) });
+            await removeRecord(uid, sec.id, d);
+            toast("تم حذف السجل", { undo: () => restoreRecord(uid, sec.id, d, prev) });
         } catch (e) {
             toast("تعذر الحذف", { type: "err" });
         }

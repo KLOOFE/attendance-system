@@ -55,7 +55,7 @@
     } else {
         /* إذا كان المعلم مسجلًا دخوله أصلًا نحوّله مباشرة */
         auth.onAuthStateChanged(async u => {
-            if (u && await isTeacher(u.uid)) location.href = "teacher.html";
+            if (u && await isTeacher(u.uid)) location.href = "attendance_camera.html";
         });
     }
 
@@ -92,7 +92,7 @@
         }
 
         if (snap.exists()) {
-            location.href = "teacher.html";
+            location.href = "attendance_camera.html";
         } else {
             await auth.signOut();
             setLoading(btn, false);

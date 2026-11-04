@@ -22,6 +22,7 @@
     <div class="page-title">
         <h1>مسح الحضور بالكاميرا</h1>
         <p id="sub">قف أمام الكاميرا وسيتعرّف النظام على وجهك ويظهر اسمك بشكل كبير بعد تسجيل حضورك</p>
+        <p id="secLine" style="margin-top:6px;font-weight:700"></p>
     </div>
 
     <div class="scan-layout">
@@ -91,36 +92,69 @@
 
     /* وضع المسح: face (الوجه) أو qr */
     let mode = (() => { try { return localStorage.getItem("scanMode") === "qr" ? "qr" : "face"; } catch (e) { return "face"; } })();
-    let gallery = [];                  /* [{uid, d:[128]}] وجوه الطلاب المسجّلة */
+    let sec = null;                    /* الشعبة الحالية (تتحدث مباشرة) */
+    let facesAll = [];                 /* كل الوجوه المسجّلة */
+    let attAll = {};                   /* كل سجلات الحضور (لقائمة اليوم والحرمان) */
+    let gallery = [];                  /* وجوه طلاب هذه الشعبة فقط */
     let runId = 0;                     /* لإيقاف حلقة التعرف القديمة عند تغيير الوضع */
     let streakUid = "", streak = 0;    /* نفس الطالب لعدة لقطات متتالية قبل تسجيل الحضور */
     const cool = {};                   /* آخر تسجيل لكل طالب (لمنع التكرار) */
     const STREAK_NEED = 3, COOLDOWN = 8000;
 
-    requireTeacher().then(() => {
+    requireSection().then(s => {
+        sec = s;
         renderTopbar(TEACHER_LINKS, "scan", TEACHER_BAR);
+        listenSection();
         listenToday();
         listenFaces();
         applyMode();
     });
 
+    /* الشعبة: الأعضاء والحد والحرمان اليدوي */
+    function listenSection() {
+        db.ref("sections/" + sec.id).on("value", snap => {
+            const v = snap.val();
+            if (!v) { location.href = "select_section.html"; return; }
+            sec = Object.assign({ id: sec.id }, v, { label: secLabelOf(v) });
+            $("#secLine").textContent = "📚 " + sec.label + " · الطلاب: " + Object.keys(sec.members || {}).length;
+            buildGallery();
+        });
+    }
+
     function listenFaces() {
         db.ref("faces").on("value", snap => {
-            gallery = [];
+            facesAll = [];
             snap.forEach(c => {
                 const v = c.val();
-                if (v && Array.isArray(v.d) && v.d.length === 128) gallery.push({ uid: c.key, d: v.d });
+                if (v && Array.isArray(v.d) && v.d.length === 128) facesAll.push({ uid: c.key, d: v.d });
             });
-            updateFaceInfo();
+            buildGallery();
         });
+    }
+
+    /* نقارن فقط مع وجوه طلاب الشعبة: أسرع وأدق */
+    function buildGallery() {
+        gallery = facesAll.filter(f => (sec && sec.members || {})[f.uid]);
+        updateFaceInfo();
     }
 
     function updateFaceInfo(extra) {
         const el = $("#faceInfo");
         if (mode !== "face") { el.textContent = ""; return; }
-        el.textContent = extra || (gallery.length
-            ? gallery.length + " وجوه مسجّلة"
-            : "لا توجد وجوه مسجّلة بعد. سجّلها من صفحة «تسجيل الوجوه»");
+        if (extra) { el.textContent = extra; return; }
+        if (sec && !Object.keys(sec.members || {}).length) {
+            el.textContent = "الشعبة ما فيها طلاب. أضفهم من لوحة المعلم ← «طلاب الشعبة»";
+        } else if (!gallery.length) {
+            el.textContent = "لا توجد وجوه مسجّلة بعد. سجّلها من صفحة «تسجيل الوجوه»";
+        } else {
+            el.textContent = gallery.length + " وجوه مسجّلة";
+        }
+    }
+
+    /* هل الطالب محروم في هذه الشعبة؟ */
+    function isDeprived(uid) {
+        const recs = (attAll[uid] || {})[sec.id] || {};
+        return deprivation(absencesOf(recs), sec.limit || 0, (sec.override || {})[uid]).deprived;
     }
 
     function applyMode() {
@@ -288,7 +322,7 @@
         busy = true;
 
         try {
-            showResult(await markAttendance(uid, "qr"), raw);
+            showResult(await markAttendance(uid, "qr", sec), raw);
         } catch (e) {
             showKiosk("err", "❌", "حدث خطأ", "تعذر الاتصال بقاعدة البيانات أو لا تملك الصلاحية");
         }
@@ -298,14 +332,18 @@
 
     /* عرض نتيجة تسجيل الحضور (مشتركة بين الوجه والـ QR) */
     function showResult(r, raw) {
+        const dep = r.uid && isDeprived(r.uid) ? " · ⛔ محروم من المقرر" : "";
         if (r.status === "ok") {
-            showKiosk("ok", "✅", r.student.name, "تم تسجيل الحضور · " + r.time);
-            beep(true);
+            showKiosk(dep ? "warn" : "ok", dep ? "⚠️" : "✅", r.student.name, "تم تسجيل الحضور · " + r.time + dep);
+            beep(!dep);
         } else if (r.status === "updated") {
-            showKiosk("ok", "✅", r.student.name, "تم تحديث حالته إلى حاضر (كانت: " + STATUS[r.from].label + ")");
-            beep(true);
+            showKiosk(dep ? "warn" : "ok", dep ? "⚠️" : "✅", r.student.name, "تم تحديث حالته إلى حاضر (كانت: " + STATUS[r.from].label + ")" + dep);
+            beep(!dep);
         } else if (r.status === "dup") {
-            showKiosk("warn", "⚠️", r.student.name, "مسجّل مسبقًا اليوم" + (r.time ? " · " + r.time : ""));
+            showKiosk("warn", "⚠️", r.student.name, "مسجّل مسبقًا اليوم" + (r.time ? " · " + r.time : "") + dep);
+            beep(false);
+        } else if (r.status === "notmember") {
+            showKiosk("warn", "⚠️", r.student.name, "ليس مسجّلاً في هذه الشعبة");
             beep(false);
         } else if (mode === "face") {
             showKiosk("err", "❌", "الطالب غير موجود", "");
@@ -351,7 +389,7 @@
             cool[best.uid] = now;
             busy = true;
             try {
-                showResult(await markAttendance(best.uid, "face"));
+                showResult(await markAttendance(best.uid, "face", sec));
             } catch (e) {
                 showKiosk("err", "❌", "حدث خطأ", "تعذر الاتصال بقاعدة البيانات أو لا تملك الصلاحية");
             }
@@ -377,10 +415,11 @@
             students = snap.val() || {};
 
             db.ref("attendance").on("value", s => {
+                attAll = s.val() || {};
                 const d = todayKey();
                 const rows = [];
                 s.forEach(child => {
-                    const r = child.child(d).val();
+                    const r = child.child(sec.id + "/" + d).val();
                     if (r) rows.push({ uid: child.key, st: statusOf(r), time: r.time || "" });
                 });
 
