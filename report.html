@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#5b1fa8">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" href="icon.svg">
+    <title>تقرير الشعبة</title>
+
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <link rel="stylesheet" href="style.css">
+
+    <style>
+        /* ورقة التقرير: بيضاء دائمًا (تظهر وتُطبع بنفس الشكل في الوضعين الفاتح والداكن) */
+        .sheet { background: #fff; color: #1f1635; border-radius: 16px; padding: 22px; box-shadow: var(--shadow); overflow-x: auto;
+                 -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .sheet h2 { margin: 0 0 4px; font-size: 24px; }
+        .sheet .meta { color: #6b6485; font-size: 14px; margin: 0 0 16px; display: flex; gap: 6px 18px; flex-wrap: wrap; }
+        .sheet .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 18px; }
+        .sheet .kpi { border: 1px solid #e8e1f5; border-radius: 12px; padding: 10px 12px; background: #f8f4fe; }
+        .sheet .kpi b { display: block; font-size: 24px; line-height: 1.2; }
+        .sheet .kpi span { font-size: 13px; color: #6b6485; }
+        .sheet .kpi.bad b { color: #d6334a; }
+        .sheet .kpi.warn b { color: #b97300; }
+
+        .sheet table { border-collapse: collapse; width: 100%; font-size: 13px; }
+        .sheet th, .sheet td { border: 1px solid #e0d8f0; padding: 5px 6px; text-align: center; white-space: nowrap; }
+        .sheet th { background: #f1e8fd; font-weight: 700; }
+        .sheet td.nm { text-align: right; font-weight: 700; }
+        .sheet th.d { padding: 6px 2px; height: 78px; }
+        .sheet th.d span { writing-mode: vertical-rl; transform: rotate(180deg); display: inline-block; font-size: 11px; direction: ltr; }
+        .sheet td.c { width: 26px; min-width: 26px; font-weight: 800; }
+        .sheet td.ok { background: #e6f7ee; color: #12a150; }
+        .sheet td.bad { background: #fde8eb; color: #d6334a; }
+        .sheet td.warn { background: #fff4dc; color: #b97300; }
+        .sheet td.n { color: #b5adc9; }
+        .sheet tr.dep td { background: #fff5f6; }
+        .sheet tr.tot td { background: #f8f4fe; font-weight: 700; }
+        .sheet .st { font-weight: 700; }
+        .sheet .st.bad { color: #d6334a; }
+        .sheet .st.warn { color: #b97300; }
+        .sheet .st.ok { color: #12a150; }
+        .sheet .legend { margin-top: 14px; font-size: 13px; color: #6b6485; line-height: 1.9; }
+        .sheet .empty-s { text-align: center; padding: 40px 10px; color: #6b6485; }
+
+        @media print {
+            @page { size: A4 landscape; margin: 10mm; }
+            body { background: #fff !important; }
+            .topbar, .no-print, .toasts { display: none !important; }
+            .page { padding: 0 !important; max-width: none !important; margin: 0 !important; }
+            .sheet { box-shadow: none; border-radius: 0; padding: 0; overflow: visible; }
+            .sheet table { font-size: 11px; }
+            .sheet tr { break-inside: avoid; }
+            .sheet thead { display: table-header-group; }
+        }
+    </style>
+</head>
+<body class="locked">
+
+<header class="topbar" id="topbar"></header>
+
+<main class="page">
+    <div class="page-title no-print">
+        <h1>تقرير الشعبة</h1>
+        <p id="sub">تقرير الحضور الكامل لكل الطلاب وكل الأيام</p>
+    </div>
+
+    <div class="toolbar no-print">
+        <button class="btn" id="xlsx" type="button" disabled>⬇ تنزيل Excel</button>
+        <button class="btn light" id="print" type="button" disabled>🖨 طباعة / حفظ PDF</button>
+        <a class="btn light" href="teacher.html">العودة للوحة المعلم</a>
+    </div>
+
+    <section class="sheet" id="sheet">
+        <div class="empty-s">جارٍ تجهيز التقرير...</div>
+    </section>
+</main>
+
+<script src="app.js"></script>
+<script>
+    let sec = null;
+    let rep = null;
+
+    requireSection().then(init);
+
+    async function init(s) {
+        sec = s;
+        renderTopbar(TEACHER_LINKS, "students", TEACHER_BAR);
+        try {
+            rep = await build();
+            render();
+            $("#xlsx").disabled = false;
+            $("#print").disabled = false;
+        } catch (e) {
+            $("#sheet").innerHTML = `<div class="empty-s">تعذر تحميل التقرير</div>`;
+        }
+    }
+
+    /* ---------- جمع البيانات: سجلات طلاب هذه الشعبة فقط ---------- */
+    async function build() {
+        const uids = Object.keys(sec.members || {});
+        const [stSnap, ...recSnaps] = await Promise.all([
+            db.ref("students").once("value"),
+            ...uids.map(u => db.ref(`attendance/${u}/${sec.id}`).once("value"))
+        ]);
+        const names = stSnap.val() || {};
+
+        const students = uids.map((u, i) => {
+            const st = names[u] || {};
+            return { uid: u, name: st.name || "بدون اسم", email: st.email || "", recs: recSnaps[i].val() || {} };
+        });
+        students.sort((a, b) => a.name.localeCompare(b.name, LANG === "en" ? "en" : "ar"));
+
+        /* كل الأيام التي سُجّل فيها شيء في هذه الشعبة */
+        const days = [...new Set(students.flatMap(s => Object.keys(s.recs)))].sort();
+        const limit = sec.limit || 0;
+
+        students.forEach(s => {
+            const c = { present: 0, absent: 0, excused: 0 };
+            days.forEach(d => { if (s.recs[d]) c[statusOf(s.recs[d])]++; });
+            const denom = days.length - c.excused;                 /* الغياب بعذر لا يُحتسب ضد الطالب */
+            s.c = c;
+            s.pct = denom > 0 ? Math.round(c.present / denom * 100) : null;
+            s.dep = deprivation(c.absent, limit, (sec.override || {})[s.uid]);
+            s.state = stateOf(s.dep, limit);
+        });
+
+        const perDay = days.map(d => students.filter(s => s.recs[d] && statusOf(s.recs[d]) === "present").length);
+        const pcts = students.map(s => s.pct).filter(x => x !== null);
+
+        return {
+            students, days, perDay, limit,
+            avg: pcts.length ? Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length) : null,
+            deprived: students.filter(s => s.dep.deprived).length,
+            warn: students.filter(s => s.dep.warn).length
+        };
+    }
+
+    function stateOf(dep, limit) {
+        if (dep.deprived) return { k: "bad", t: dep.manual ? "محروم (يدويًا)" : "محروم" };
+        if (dep.manual && dep.auto) return { k: "ok", t: "مسموح (يدويًا)" };
+        if (dep.warn) return { k: "warn", t: "⚠️ على وشك الحرمان" };
+        return { k: "ok", t: limit ? "طبيعي" : "—" };
+    }
+
+    const ICON = { present: ["✓", "ok"], absent: ["✗", "bad"], excused: ["✎", "warn"] };
+    const fmtPct = p => (p === null ? "—" : p + "%");
+    const range = () => (rep.days.length ? rep.days[0] + " → " + rep.days[rep.days.length - 1] : "—");
+
+    /* ---------- عرض التقرير (نفسه يُطبع كـ PDF) ---------- */
+    function render() {
+        const r = rep;
+        if (!r.students.length) { $("#sheet").innerHTML = `<div class="empty-s">لا يوجد طلاب في هذه الشعبة</div>`; return; }
+        if (!r.days.length) { $("#sheet").innerHTML = `<div class="empty-s">لا توجد سجلات حضور لهذه الشعبة بعد</div>`; return; }
+
+        const kpi = (n, t, k = "") => `<div class="kpi ${k}"><b>${n}</b><span>${t}</span></div>`;
+        const head = `<tr>
+            <th>#</th><th>الاسم</th>
+            ${r.days.map(d => `<th class="d"><span>${escapeHtml(d)}</span></th>`).join("")}
+            <th>${STATUS.present.label}</th><th>${STATUS.absent.label}</th><th>${STATUS.excused.label}</th>
+            <th>نسبة الحضور</th><th>المتبقي</th><th>الحالة</th></tr>`;
+
+        const body = r.students.map((s, i) => `<tr class="${s.dep.deprived ? "dep" : ""}">
+            <td>${i + 1}</td>
+            <td class="nm">${escapeHtml(s.name)}</td>
+            ${r.days.map(d => {
+                const x = s.recs[d];
+                if (!x) return `<td class="c n">–</td>`;
+                const [ic, cls] = ICON[statusOf(x)];
+                return `<td class="c ${cls}">${ic}</td>`;
+            }).join("")}
+            <td>${s.c.present}</td><td>${s.c.absent}</td><td>${s.c.excused}</td>
+            <td><b>${fmtPct(s.pct)}</b></td>
+            <td>${s.dep.left === null ? "—" : s.dep.left}</td>
+            <td class="st ${s.state.k}">${s.state.t}</td></tr>`).join("");
+
+        const foot = `<tr class="tot"><td></td><td class="nm">الحاضرون</td>
+            ${r.perDay.map(n => `<td>${n}</td>`).join("")}
+            <td colspan="6"></td></tr>`;
+
+        $("#sheet").innerHTML = `
+            <h2>${escapeHtml(sec.label)}</h2>
+            <div class="meta">
+                <span>تقرير الشعبة</span>
+                <span>تاريخ التقرير: <b dir="ltr">${todayKey()}</b></span>
+                <span>الفترة: <b dir="ltr">${escapeHtml(range())}</b></span>
+            </div>
+            <div class="kpis">
+                ${kpi(r.students.length, "إجمالي الطلاب")}
+                ${kpi(r.days.length, "أيام مسجّلة")}
+                ${kpi(fmtPct(r.avg), "متوسط الحضور")}
+                ${kpi(r.limit ? r.limit : "—", "حد الحرمان")}
+                ${kpi(r.warn, "على وشك الحرمان", r.warn ? "warn" : "")}
+                ${kpi(r.deprived, "محروم", r.deprived ? "bad" : "")}
+            </div>
+            <table><thead>${head}</thead><tbody>${body}${foot}</tbody></table>
+            <div class="legend">
+                ✓ ${STATUS.present.label} &nbsp; ✗ ${STATUS.absent.label} &nbsp; ✎ ${STATUS.excused.label} &nbsp; – بدون سجل لذلك اليوم<br>
+                الغياب بعذر لا يُحتسب ضد الطالب في نسبة الحضور<br>
+                الخانة (–) تعني عدم وجود سجل لذلك اليوم. اضغط «إنهاء المحاضرة» لتسجيل الغياب لمن لم يحضر
+            </div>`;
+    }
+
+    /* ---------- تنزيل Excel ---------- */
+    const safeName = () => ("report-" + sec.course + "-" + sec.section + "-" + todayKey()).replace(/[\\/:*?"<>|\s]+/g, "-");
+
+    $("#xlsx").addEventListener("click", () => {
+        if (typeof XLSX === "undefined") { toast("تعذر إنشاء ملف Excel. تأكد من الاتصال بالإنترنت ثم حدّث الصفحة", { type: "err" }); return; }
+        const r = rep;
+
+        /* ورقة الملخص */
+        const sum = [
+            [tr("تقرير الشعبة"), sec.label],
+            [tr("تاريخ التقرير:"), todayKey()],
+            [tr("الفترة:"), range()],
+            [tr("إجمالي الطلاب"), r.students.length],
+            [tr("أيام مسجّلة"), r.days.length],
+            [tr("متوسط الحضور"), r.avg === null ? "—" : r.avg + "%"],
+            [tr("حد الحرمان"), r.limit || "—"],
+            [tr("على وشك الحرمان"), r.warn],
+            [tr("محروم"), r.deprived]
+        ];
+
+        /* ورقة الحضور: صف لكل طالب وعمود لكل يوم */
+        const head = ["#", tr("الاسم"), tr("البريد"), ...r.days,
+            tr(STATUS.present.label), tr(STATUS.absent.label), tr(STATUS.excused.label),
+            tr("نسبة الحضور") + " %", tr("المتبقي"), tr("الحالة")];
+        const rows = r.students.map((s, i) => [
+            i + 1, s.name, s.email,
+            ...r.days.map(d => (s.recs[d] ? ICON[statusOf(s.recs[d])][0] : "")),
+            s.c.present, s.c.absent, s.c.excused,
+            s.pct === null ? "" : s.pct,
+            s.dep.left === null ? "" : s.dep.left,
+            tr(s.state.t)
+        ]);
+        const foot = ["", tr("الحاضرون"), "", ...r.perDay];
+
+        const ws1 = XLSX.utils.aoa_to_sheet(sum);
+        ws1["!cols"] = [{ wch: 24 }, { wch: 40 }];
+        const ws2 = XLSX.utils.aoa_to_sheet([head, ...rows, foot]);
+        ws2["!cols"] = [{ wch: 4 }, { wch: 28 }, { wch: 28 }, ...r.days.map(() => ({ wch: 11 })),
+            { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 13 }, { wch: 10 }, { wch: 22 }];
+
+        const wb = XLSX.utils.book_new();
+        wb.Workbook = { Views: [{ RTL: LANG !== "en" }] };
+        XLSX.utils.book_append_sheet(wb, ws2, tr("الحضور"));
+        XLSX.utils.book_append_sheet(wb, ws1, tr("ملخص"));
+        XLSX.writeFile(wb, safeName() + ".xlsx");
+    });
+
+    /* ---------- طباعة / حفظ PDF ---------- */
+    $("#print").addEventListener("click", () => {
+        const old = document.title;
+        document.title = safeName();           /* اسم ملف الـ PDF */
+        window.addEventListener("afterprint", () => { document.title = old; }, { once: true });
+        window.print();
+    });
+</script>
+</body>
+</html>

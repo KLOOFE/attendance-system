@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#5b1fa8">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" href="icon.svg">
+    <title>إنشاء حساب طالب</title>
+
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar" id="topbar"></header>
+
+<main class="center-page">
+    <form class="card center" id="form" novalidate>
+        <div class="icon-badge">✨</div>
+        <h2>إنشاء حساب طالب</h2>
+        <p class="sub">سجّل بياناتك لتحصل على رمز QR الخاص بك</p>
+
+        <div class="field">
+            <label for="name">اسم الطالب</label>
+            <input type="text" id="name" placeholder="الاسم الكامل" autocomplete="name" required>
+        </div>
+
+        <div class="field">
+            <label for="email">البريد الجامعي</label>
+            <input type="email" id="email" dir="ltr" placeholder="name@university.edu" autocomplete="username" required>
+        </div>
+
+        <div class="field">
+            <label for="password">كلمة المرور</label>
+            <input type="password" id="password" dir="ltr" placeholder="6 أحرف على الأقل" autocomplete="new-password" required>
+        </div>
+
+        <button class="btn block lg" id="btn" type="submit">
+            <span class="spinner"></span>
+            <span>إنشاء الحساب</span>
+        </button>
+
+        <p class="msg" id="msg"></p>
+
+        <p class="link-row">لديك حساب؟ <a href="login.html">تسجيل الدخول</a></p>
+    </form>
+</main>
+
+<script src="app.js"></script>
+<script>
+    renderTopbar([
+        { key: "login", href: "login.html", text: "تسجيل الدخول" },
+        { key: "teacher", href: "teacher_login.html", text: "دخول المعلم" }
+    ], "", { home: "login.html" });
+
+    const form = $("#form"), btn = $("#btn"), msg = $("#msg");
+
+    form.addEventListener("submit", e => {
+        e.preventDefault();
+        hideMsg(msg);
+
+        const name = $("#name").value.trim();
+        const email = $("#email").value.trim();
+        const password = $("#password").value;
+
+        if (!name || !email || !password) {
+            showMsg(msg, "عبّ جميع الحقول", "err");
+            return;
+        }
+
+        setLoading(btn, true);
+
+        auth.createUserWithEmailAndPassword(email, password)
+            .then(cred => {
+                const user = cred.user;
+                /* ننتظر الحفظ قبل التحويل حتى لا تضيع البيانات */
+                return db.ref("students/" + user.uid).set({
+                    name: name,
+                    email: email,
+                    uid: user.uid,
+                    created_at: new Date().toISOString()
+                }).then(() => {
+                    window.location.href = "student.html?id=" + user.uid;
+                });
+            })
+            .catch(err => {
+                setLoading(btn, false);
+                showMsg(msg, authError(err), "err");
+            });
+    });
+</script>
+</body>
+</html>
