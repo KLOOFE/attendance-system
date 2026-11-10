@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#5b1fa8">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" href="icon.svg">
+    <title>اختيار المقرر والشعبة</title>
+
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="locked">
+
+<header class="topbar" id="topbar"></header>
+
+<main class="page">
+    <div class="page-title">
+        <h1>اختيار المقرر والشعبة</h1>
+        <p>اختر مقررك ليبدأ التحضير مباشرة، أو أضف مقررًا جديدًا</p>
+    </div>
+
+    <div class="two">
+        <section class="card wide">
+            <h3>مقرراتي</h3>
+            <ul class="today-list" id="list" style="max-height:none">
+                <li style="justify-content:center;color:var(--muted)">جارٍ التحميل...</li>
+            </ul>
+        </section>
+
+        <form class="card wide" id="form" novalidate>
+            <h3>إضافة مقرر وشعبة</h3>
+
+            <div class="field">
+                <label for="course">اسم المقرر</label>
+                <input id="course" maxlength="100" placeholder="مثال: برمجة 1" autocomplete="off">
+            </div>
+
+            <div class="field">
+                <label for="section">رقم أو اسم الشعبة</label>
+                <input id="section" maxlength="40" placeholder="مثال: 12" autocomplete="off">
+            </div>
+
+            <label style="display:flex;gap:10px;align-items:flex-start;margin:0 0 16px;font-size:14px;cursor:pointer">
+                <input type="checkbox" id="all" checked style="margin-top:6px;width:18px;height:18px;flex:none">
+                <span>إضافة كل الطلاب المسجّلين لهذه الشعبة</span>
+            </label>
+
+            <button class="btn block lg" id="btn" type="submit">
+                <span class="spinner"></span>
+                <span>إنشاء وبدء التحضير</span>
+            </button>
+            <p class="msg" id="msg"></p>
+        </form>
+    </div>
+</main>
+
+<script src="app.js"></script>
+<script>
+    let user = null;
+
+    requireTeacher().then(u => {
+        user = u;
+        renderTopbar([{ key: "students", href: "teacher.html", text: "لوحة المعلم" }], "", TEACHER_BAR);
+        load();
+    });
+
+    /* يحفظ اختيار الشعبة ثم يفتح الصفحة المطلوبة (الافتراضي: مسح الوجوه) */
+    function go(id, label, page) {
+        setSection(id, label);
+        location.href = page || "attendance_camera.html";
+    }
+
+    function load() {
+        db.ref("sections").once("value").then(snap => {
+            const mine = [];
+            snap.forEach(c => {
+                const v = c.val() || {};
+                if (v.teacher === user.uid) mine.push(Object.assign({ id: c.key }, v));
+            });
+            mine.sort((a, b) => (b.created || 0) - (a.created || 0));
+
+            if (!mine.length) {
+                $("#list").innerHTML = `<li style="justify-content:center;color:var(--muted)">لا توجد مقررات بعد. أضف أول مقرر من النموذج</li>`;
+                return;
+            }
+
+            $("#list").innerHTML = mine.map(v => {
+                const n = Object.keys(v.members || {}).length;
+                const eid = escapeHtml(v.id);
+                return `<li>
+                    <div class="avatar">${escapeHtml(initial(v.course))}</div>
+                    <div class="nm">${escapeHtml(v.course)}
+                        <small style="display:block;color:var(--muted);font-weight:400">شعبة ${escapeHtml(v.section)} · الطلاب: ${n}</small>
+                    </div>
+                    <button class="btn sm" type="button" data-go="${eid}">🧑 ابدأ التحضير</button>
+                    <button class="btn ghost sm" type="button" data-dash="${eid}" title="لوحة المعلم للشعبة">📊</button>
+                </li>`;
+            }).join("");
+
+            $("#list").onclick = e => {
+                const g = e.target.closest("[data-go]"), d = e.target.closest("[data-dash]");
+                const id = g ? g.dataset.go : d ? d.dataset.dash : null;
+                if (!id) return;
+                const v = mine.find(x => x.id === id);
+                go(id, secLabelOf(v), g ? "attendance_camera.html" : "teacher.html");
+            };
+        }).catch(() => {
+            $("#list").innerHTML = `<li style="justify-content:center;color:var(--muted)">تعذر تحميل المقررات</li>`;
+        });
+    }
+
+    $("#form").addEventListener("submit", async e => {
+        e.preventDefault();
+        const msg = $("#msg"), btn = $("#btn");
+        hideMsg(msg);
+
+        const course = $("#course").value.trim();
+        const section = $("#section").value.trim();
+        if (course.length < 2 || !section) { showMsg(msg, "اكتب اسم المقرر ورقم الشعبة", "err"); return; }
+
+        setLoading(btn, true);
+        try {
+            /* إذا نفس المقرر والشعبة موجودين عندك نفتحهم بدل ما نكرر */
+            const all = (await db.ref("sections").once("value"));
+            let existing = null;
+            all.forEach(c => {
+                const v = c.val() || {};
+                if (v.teacher === user.uid && v.course === course && v.section === section) existing = Object.assign({ id: c.key }, v);
+            });
+            if (existing) { go(existing.id, secLabelOf(existing)); return; }
+
+            const members = {};
+            if ($("#all").checked) {
+                const st = await db.ref("students").once("value");
+                st.forEach(c => { members[c.key] = true; });
+            }
+
+            const ref = db.ref("sections").push();
+            const data = { course, section, teacher: user.uid, created: Date.now() };
+            if (Object.keys(members).length) data.members = members;
+            await ref.set(data);
+            go(ref.key, secLabelOf(data));
+        } catch (err) {
+            setLoading(btn, false);
+            showMsg(msg, "تعذر الإنشاء، تأكد من الصلاحيات والاتصال", "err");
+        }
+    });
+</script>
+</body>
+</html>
