@@ -293,6 +293,41 @@ const EN = {
     "الغيابات": "Absences",
     "حالة الحرمان": "Deprivation status",
 
+    /* إنذار قبل الحرمان */
+    "على وشك الحرمان": "Close to deprivation",
+    "على وشك": "Near limit",
+    "⚠️ تنبيه: بقي لك غياب واحد فقط قبل الحرمان": "⚠️ Notice: you have only one absence left before deprivation",
+    "⚠️ تنبيه: بقي لك غيابان قبل الحرمان": "⚠️ Notice: you have two absences left before deprivation",
+    "⛔ أنت محروم من هذا المقرر. راجع معلمك": "⛔ You are deprived from this course. Please contact your teacher",
+    "✓ وضعك سليم": "✓ You are in good standing",
+    "حالتي في المقررات": "My status in courses",
+
+    /* تقرير الشعبة */
+    "تقرير الشعبة": "Section Report",
+    "تقرير الحضور الكامل لكل الطلاب وكل الأيام": "Full attendance report for all students and all days",
+    "تنزيل Excel": "Download Excel",
+    "طباعة / حفظ PDF": "Print / Save as PDF",
+    "جارٍ تجهيز التقرير...": "Preparing the report...",
+    "تعذر تحميل التقرير": "Could not load the report",
+    "تعذر إنشاء ملف Excel. تأكد من الاتصال بالإنترنت ثم حدّث الصفحة": "Could not create the Excel file. Check your internet connection and refresh the page",
+    "لا يوجد طلاب في هذه الشعبة": "There are no students in this section",
+    "لا توجد سجلات حضور لهذه الشعبة بعد": "There are no attendance records for this section yet",
+    "تاريخ التقرير:": "Report date:",
+    "الفترة:": "Period:",
+    "أيام مسجّلة": "Recorded days",
+    "متوسط الحضور": "Average attendance",
+    "حد الحرمان": "Deprivation limit",
+    "المتبقي": "Remaining",
+    "طبيعي": "Normal",
+    "مسموح": "Allowed",
+    "يدويًا": "manual",
+    "بدون سجل لذلك اليوم": "no record for that day",
+    "الغياب بعذر لا يُحتسب ضد الطالب في نسبة الحضور": "Excused absences are not counted against the student in the attendance rate",
+    "الخانة (–) تعني عدم وجود سجل لذلك اليوم. اضغط «إنهاء المحاضرة» لتسجيل الغياب لمن لم يحضر": "A cell with (–) means there is no record for that day. Press \"End lecture\" to mark absence for those who did not attend",
+    "التقرير": "Report",
+    "ملخص": "Summary",
+    "الحضور": "Attendance",
+
     /* ألفاظ مفردة تأتي مركّبة مع أسماء/أرقام */
     "الكاميرا": "the camera",
     "؟": "?",
@@ -598,11 +633,20 @@ async function requireSection() {
    وللمعلم أن يحرم أي طالب أو يرفع عنه الحرمان يدويًا (override) */
 const absencesOf = recs => Object.values(recs || {}).filter(r => statusOf(r) === "absent").length;
 
+const WARN_AT = 2;   /* ننبّه الطالب عندما يتبقى له غياب واحد أو غيابان قبل الحرمان */
+
 function deprivation(absences, limit, override) {
     const auto = !!limit && absences >= limit;
     const deprived = override === "deprived" ? true : override === "allowed" ? false : auto;
-    return { auto, deprived, manual: !!override, absences };
+    const left = limit ? Math.max(limit - absences, 0) : null;                 /* المتبقي قبل الحرمان */
+    const warn = !deprived && !!limit && left > 0 && left <= WARN_AT;          /* على وشك الحرمان */
+    return { auto, deprived, manual: !!override, absences, left, warn };
 }
+
+/* رسالة الإنذار للطالب */
+const warnMsg = left => left <= 1
+    ? "⚠️ تنبيه: بقي لك غياب واحد فقط قبل الحرمان"
+    : "⚠️ تنبيه: بقي لك غيابان قبل الحرمان";
 
 /* want = هل نبي الطالب محروم؟ إذا يطابق الحالة التلقائية نحذف الـ override */
 function setDeprived(sid, uid, want, auto) {

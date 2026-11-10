@@ -66,6 +66,8 @@
                 <div class="row"><span>المعرّف</span><b class="ltr">${escapeHtml(s.uid)}</b></div>
             </div>
 
+            <div id="mine"></div>
+
             <div class="stats" id="stats"></div>
 
             <h3 class="section" style="text-align:right">سجل الحضور</h3>
@@ -93,17 +95,54 @@
         loadHistory(s.uid);
     }
 
+    /* حالة الطالب في كل مقرر: الغيابات والحد وإنذار قبل الحرمان */
+    async function showCourses(uid, bySec) {
+        const ids = Object.keys(bySec);
+        if (!ids.length) return;
+
+        const infos = await Promise.all(ids.map(async sid => {
+            try {
+                const get = p => db.ref(`sections/${sid}/${p}`).once("value").then(x => x.val());
+                const [course, section, limit, ov] = await Promise.all([get("course"), get("section"), get("limit"), get("override/" + uid)]);
+                return course ? { sid, label: secLabelOf({ course, section }), limit: limit || 0, override: ov || null } : null;
+            } catch (e) { return null; }      /* ما عنده صلاحية قراءة هذه الشعبة: نتجاوزها */
+        }));
+
+        const rows = infos.filter(Boolean).map(i => {
+            const dep = deprivation(absencesOf(bySec[i.sid]), i.limit, i.override);
+            const tone = dep.deprived ? "bad" : dep.warn ? "warn" : "ok";
+            const msg = dep.deprived ? "⛔ أنت محروم من هذا المقرر. راجع معلمك"
+                : dep.warn ? warnMsg(dep.left)
+                : i.limit ? "✓ وضعك سليم · الحرمان عند: " + i.limit + " غيابات"
+                : "لم يُحدد حد للحرمان";
+            const pct = i.limit ? Math.min(100, Math.round(dep.absences / i.limit * 100)) : 0;
+            return `<div style="border:1px solid ${tone === "ok" ? "var(--line)" : "var(--" + tone + ")"};border-radius:14px;padding:12px 14px;margin-bottom:10px;text-align:right">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+                    <b>${escapeHtml(i.label)}</b>
+                    <span>الغيابات: <b dir="ltr">${dep.absences}${i.limit ? " / " + i.limit : ""}</b></span>
+                </div>
+                ${i.limit ? `<div class="pct"><div class="track"><div class="fill ${tone === "ok" ? "" : tone}" style="width:${pct}%"></div></div></div>` : ""}
+                <div class="badge ${tone}" style="white-space:normal">${msg}</div>
+            </div>`;
+        });
+
+        if (rows.length) $("#mine").innerHTML = `<h3 class="section" style="text-align:right">حالتي في المقررات</h3>` + rows.join("");
+    }
+
     function loadHistory(uid) {
         db.ref("attendance/" + uid).once("value").then(snap => {
             const items = [];
+            const bySec = {};                             /* { sectionId: { day: record } } */
             const isDay = k => /^\d{4}-\d{2}-\d{2}$/.test(k);
             snap.forEach(c => {
                 if (isDay(c.key)) {                       /* سجل قديم (قبل المقررات) */
                     items.push(Object.assign({ date: c.key }, c.val() || {}));
                 } else {                                  /* سجلات شعبة */
+                    bySec[c.key] = c.val() || {};
                     c.forEach(d => { items.push(Object.assign({ date: d.key }, d.val() || {})); });
                 }
             });
+            showCourses(uid, bySec);
             items.sort((a, b) => b.date.localeCompare(a.date));
 
             const c = { present: 0, absent: 0, excused: 0 };

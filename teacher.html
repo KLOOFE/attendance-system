@@ -29,6 +29,7 @@
         <button class="btn light" id="members" type="button">👥 طلاب الشعبة</button>
         <button class="btn light" id="endLecture" type="button">📋 إنهاء المحاضرة</button>
         <button class="btn light" id="export" type="button">⬇ تصدير CSV</button>
+        <a class="btn light" href="report.html">📊 تقرير الشعبة</a>
         <a class="btn" href="attendance_camera.html">📷 مسح الحضور</a>
     </div>
 
@@ -63,7 +64,7 @@
     const loaded = { s: false, a: false, c: false };
 
     const FILTERS = [
-        ["all", "الكل"], ["present", "حاضر"], ["absent", "غائب"], ["excused", "بعذر"], ["none", "بدون سجل"], ["deprived", "محروم"]
+        ["all", "الكل"], ["present", "حاضر"], ["absent", "غائب"], ["excused", "بعذر"], ["none", "بدون سجل"], ["warn", "على وشك"], ["deprived", "محروم"]
     ];
     const PRESETS = [3, 4, 5, 6];
 
@@ -157,8 +158,12 @@
         const students = roster();
 
         /* إحصائيات اليوم المحدد */
-        const counts = { present: 0, absent: 0, excused: 0, none: 0, deprived: 0 };
-        students.forEach(s => { counts[keyOf(rec(s.uid))]++; if (depOf(s.uid).deprived) counts.deprived++; });
+        const counts = { present: 0, absent: 0, excused: 0, none: 0, deprived: 0, warn: 0 };
+        students.forEach(s => {
+            counts[keyOf(rec(s.uid))]++;
+            const d = depOf(s.uid);
+            if (d.deprived) counts.deprived++; else if (d.warn) counts.warn++;
+        });
 
         const tile = (n, t) => `<div class="stat"><b>${n}</b><span>${t}</span></div>`;
         $("#stats").innerHTML =
@@ -178,7 +183,7 @@
 
         const q = $("#search").value.trim().toLowerCase();
         const shown = students.filter(s =>
-            (filter === "all" || (filter === "deprived" ? depOf(s.uid).deprived : keyOf(rec(s.uid)) === filter)) &&
+            (filter === "all" || (filter === "deprived" ? depOf(s.uid).deprived : filter === "warn" ? depOf(s.uid).warn : keyOf(rec(s.uid)) === filter)) &&
             (!q || s.name.toLowerCase().includes(q) || s.email.toLowerCase().includes(q)));
 
         const list = $("#list");
@@ -207,7 +212,7 @@
             const limitTxt = sec.limit ? " / " + sec.limit : "";
 
             return `
-            <div class="student" style="animation-delay:${Math.min(i, 12) * 40}ms${dep.deprived ? ";outline:2px solid var(--bad)" : ""}">
+            <div class="student" style="animation-delay:${Math.min(i, 12) * 40}ms${dep.deprived ? ";outline:2px solid var(--bad)" : dep.warn ? ";outline:2px solid var(--warn)" : ""}">
                 <div class="head">
                     <div class="avatar">${escapeHtml(initial(s.name))}</div>
                     <div class="info"><h3>${escapeHtml(s.name)}</h3><p>${escapeHtml(s.email)}</p></div>
@@ -220,7 +225,7 @@
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px;font-size:13px;color:var(--muted)">
                     <span>الغيابات: <b dir="ltr">${dep.absences}${limitTxt}</b></span>
-                    ${dep.deprived ? `<span class="badge bad">⛔ محروم</span>` : ""}
+                    ${dep.deprived ? `<span class="badge bad">⛔ محروم</span>` : dep.warn ? `<span class="badge warn">⚠️ على وشك الحرمان</span>` : ""}
                 </div>
                 <div class="seg">${seg}</div>
                 <div class="actions">
