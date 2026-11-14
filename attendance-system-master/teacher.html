@@ -73,17 +73,64 @@
         sec = s;
         renderTopbar(TEACHER_LINKS, "students", TEACHER_BAR);
         $("#date").value = day;
+// Load students through Flask Backend
+(async () => {
+    try {
+        const user = firebase.auth().currentUser;
 
-        db.ref("students").once("value").then(snap => {
-            snap.forEach(child => {
-                const d = child.val() || {};
-                all.push({ uid: d.uid || child.key, name: d.name || "بدون اسم", email: d.email || "" });
+        if (!user) {
+            throw new Error("Teacher is not logged in");
+        }
+
+        const token = await user.getIdToken();
+
+        const response = await fetch(
+            "http://127.0.0.1:5000/api/students",
+            {
+                method: "GET",
+                headers: {
+                    "Authorization": "Bearer " + token
+                }
+            }
+        );
+
+        const result = await response.json();
+
+        if (!response.ok || !result.success) {
+            throw new Error(result.message || "Failed to load students");
+        }
+
+        const students = result.students || {};
+
+        Object.entries(students).forEach(([key, value]) => {
+            const d = value || {};
+
+            all.push({
+                uid: d.uid || key,
+                name: d.name || "بدون اسم",
+                email: d.email || ""
             });
-            all.sort((a, b) => a.name.localeCompare(b.name, LANG === "en" ? "en" : "ar"));
-            loaded.s = true;
-            render();
-        }).catch(() => { $("#list").innerHTML = `<div class="empty">تعذر تحميل الطلاب</div>`; });
+        });
 
+        all.sort((a, b) =>
+            a.name.localeCompare(
+                b.name,
+                LANG === "en" ? "en" : "ar"
+            )
+        );
+
+        loaded.s = true;
+        render();
+
+        console.log("Students loaded from Flask:", all.length);
+
+    } catch (error) {
+        console.error("Flask students API error:", error);
+
+        $("#list").innerHTML =
+            `<div class="empty">تعذر تحميل الطلاب</div>`;
+    }
+})();
         /* الشعبة نفسها (الحد والأعضاء والحرمان اليدوي) */
         db.ref("sections/" + sec.id).on("value", snap => {
             const v = snap.val();
