@@ -11,6 +11,7 @@
     <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-functions.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
     <link rel="stylesheet" href="style.css">
 </head>
@@ -74,6 +75,7 @@
 </main>
 
 <script src="app.js"></script>
+<script src="backend.js"></script>
 <script>
     const video = $("#video");
     const scanner = $("#scanner");
@@ -322,7 +324,7 @@
         busy = true;
 
         try {
-            showResult(await markAttendance(uid, "qr", sec), raw);
+            showResult(await markAttendanceSecure(sec, "qr", { uid }), raw);
         } catch (e) {
             showKiosk("err", "❌", "حدث خطأ", "تعذر الاتصال بقاعدة البيانات أو لا تملك الصلاحية");
         }
@@ -344,6 +346,9 @@
             beep(false);
         } else if (r.status === "notmember") {
             showKiosk("warn", "⚠️", r.student.name, "ليس مسجّلاً في هذه الشعبة");
+            beep(false);
+        } else if (r.status === "nomatch") {
+            showKiosk("err", "❌", "وجه غير مطابق", "لم يتأكد السيرفر من هوية الطالب");
             beep(false);
         } else if (mode === "face") {
             showKiosk("err", "❌", "الطالب غير موجود", "");
@@ -376,7 +381,7 @@
         let best = null;
         res.forEach(r => {
             const m = matchFace(r.descriptor, gallery);
-            if (m && m.dist < FACE_MATCH && (m.second - m.dist) > FACE_MARGIN && (!best || m.dist < best.dist)) best = m;
+            if (m && m.dist < FACE_MATCH && (m.second - m.dist) > FACE_MARGIN && (!best || m.dist < best.dist)) best = Object.assign({}, m, { descriptor: r.descriptor });
         });
 
         if (!best) { streakUid = ""; streak = 0; updateFaceInfo("وجه غير معروف"); return; }
@@ -389,7 +394,7 @@
             cool[best.uid] = now;
             busy = true;
             try {
-                showResult(await markAttendance(best.uid, "face", sec));
+                showResult(await markAttendanceSecure(sec, "face", { uid: best.uid, descriptor: best.descriptor }));
             } catch (e) {
                 showKiosk("err", "❌", "حدث خطأ", "تعذر الاتصال بقاعدة البيانات أو لا تملك الصلاحية");
             }
