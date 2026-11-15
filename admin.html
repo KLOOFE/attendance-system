@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#5b1fa8">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" href="icon.svg">
+    <title>لوحة المشرف</title>
+
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-functions.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar" id="topbar"></header>
+
+<main class="page">
+    <div class="page-title">
+        <h1>لوحة المشرف</h1>
+        <p>استيراد الطلاب والدكاترة من ملف Excel أو CSV</p>
+    </div>
+
+    <section class="card wide">
+        <h3>استيراد المستخدمين</h3>
+
+        <div class="toolbar">
+            <select class="input" id="role">
+                <option value="student">طلاب</option>
+                <option value="teacher">دكاترة</option>
+            </select>
+            <select class="input grow" id="section"><option value="">بدون إضافة لشعبة</option></select>
+            <input class="input grow" type="file" id="file" accept=".csv,.xlsx,.xls">
+            <button class="btn ghost sm" id="tpl" type="button">تحميل قالب</button>
+        </div>
+
+        <label style="display:flex;gap:8px;align-items:center;margin:10px 0">
+            <input type="checkbox" id="invite"> إرسال دعوة بالإيميل للحسابات الجديدة
+        </label>
+
+        <div id="preview"></div>
+        <button class="btn" id="go" type="button" disabled>بدء الاستيراد</button>
+        <div id="result"></div>
+    </section>
+
+    <section class="card wide">
+        <h3>آخر العمليات</h3>
+        <ul class="history" id="audit"><li class="empty-li">جارٍ التحميل...</li></ul>
+    </section>
+</main>
+
+<script src="app.js"></script>
+<script src="backend.js"></script>
+<script>
+    renderTopbar([{ href: "select_section.html", text: "المقررات" }], "", { home: "select_section.html", logout: "تسجيل الخروج", logoutTo: "teacher_login.html" });
+
+    const roleSel = $("#role"), secSel = $("#section"), fileIn = $("#file"), goBtn = $("#go");
+    let rows = [];
+
+    requireAdmin(() => { loadSections(); loadAudit(); });
+
+    function loadSections() {
+        db.ref("sections").once("value").then(snap => {
+            snap.forEach(c => {
+                const v = c.val() || {};
+                if (!v.course) return;
+                const o = document.createElement("option");
+                o.value = c.key;
+                o.textContent = secLabelOf(v);
+                secSel.appendChild(o);
+            });
+        }).catch(() => {});
+    }
+
+    function loadAudit() {
+        db.ref("audit").limitToLast(15).once("value").then(snap => {
+            const items = [];
+            snap.forEach(c => { items.push(c.val() || {}); });
+            items.reverse();
+            $("#audit").innerHTML = items.length ? items.map(i => {
+                const when = i.at ? new Date(i.at).toLocaleString("ar-SA") : "";
+                const what = i.action === "import" ? `استيراد ${i.role === "teacher" ? "دكاترة" : "طلاب"}: جديد ${i.created || 0} · موجود ${i.existing || 0} · فشل ${i.failed || 0}`
+                    : `تسجيل حضور (${escapeHtml(i.method || "")}) ${escapeHtml(i.name || "")}`;
+                return `<li><div class="hmain"><b>${what}</b></div><span class="tm">${escapeHtml(when)}</span></li>`;
+            }).join("") : `<li class="empty-li">لا توجد عمليات بعد</li>`;
+        }).catch(() => { $("#audit").innerHTML = `<li class="empty-li">تعذر التحميل</li>`; });
+    }
+
+    /* ---------- قراءة الملف ---------- */
+    const NAME_H = /^(name|full\s*name|الاسم|اسم|اسم الطالب|اسم الدكتور)$/i;
+    const MAIL_H = /^(email|e-?mail|mail|البريد|البريد الالكتروني|البريد الإلكتروني|الايميل|الإيميل)$/i;
+
+    function toRows(matrix) {
+        matrix = matrix.filter(r => r && r.some(c => String(c ?? "").trim() !== ""));
+        if (!matrix.length) return [];
+        let ni = 0, ei = 1, start = 0;
+        const head = matrix[0].map(c => String(c ?? "").trim());
+        const n = head.findIndex(h => NAME_H.test(h)), e = head.findIndex(h => MAIL_H.test(h));
+        if (n >= 0 || e >= 0) { start = 1; if (n >= 0) ni = n; if (e >= 0) ei = e; }
+        return matrix.slice(start).map(r => ({ name: String(r[ni] ?? "").trim(), email: String(r[ei] ?? "").trim() }));
+    }
+
+    fileIn.addEventListener("change", async () => {
+        rows = []; goBtn.disabled = true; $("#result").innerHTML = "";
+        const f = fileIn.files[0];
+        if (!f) { $("#preview").innerHTML = ""; return; }
+        try {
+            let wb;
+            if (/\.csv$/i.test(f.name)) wb = XLSX.read(await f.text(), { type: "string" });
+            else wb = XLSX.read(await f.arrayBuffer(), { type: "array" });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            rows = toRows(XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" }));
+        } catch (e) { $("#preview").innerHTML = `<p class="sub">تعذر قراءة الملف</p>`; return; }
+
+        if (rows.length > 500) { $("#preview").innerHTML = `<p class="sub">الحد الأقصى 500 صف في المرة الواحدة (الملف فيه ${rows.length})</p>`; rows = []; return; }
+        $("#preview").innerHTML = rows.length
+            ? `<p class="sub">معاينة (${rows.length} صف)</p><div style="overflow:auto"><table class="tbl"><tbody>${rows.slice(0, 8).map(r => `<tr><td>${escapeHtml(r.name)}</td><td dir="ltr">${escapeHtml(r.email)}</td></tr>`).join("")}</tbody></table></div>${rows.length > 8 ? `<p class="sub">... و ${rows.length - 8} صف آخر</p>` : ""}`
+            : `<p class="sub">الملف فارغ</p>`;
+        goBtn.disabled = !rows.length;
+    });
+
+    $("#tpl").addEventListener("click", () => download("name,email\nأحمد محمد,ahmed@example.com\n", "template.csv"));
+
+    function download(text, name) {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(new Blob(["\ufeff" + text], { type: "text/csv;charset=utf-8" }));
+        a.download = name; a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+
+    /* ---------- الاستيراد ---------- */
+    goBtn.addEventListener("click", async () => {
+        goBtn.disabled = true;
+        $("#result").innerHTML = `<div class="loader-dots">جارٍ الاستيراد...</div>`;
+        try {
+            const r = await callFn("importUsers", {
+                role: roleSel.value, rows, sectionId: secSel.value || undefined, sendInvites: $("#invite").checked
+            });
+            const tile = (n, t) => `<div class="stat"><b>${n}</b><span>${t}</span></div>`;
+            $("#result").innerHTML =
+                `<div class="stats">${tile(r.created, "تم إنشاؤها")}${tile(r.existing, "موجودة مسبقًا")}${tile(r.failed.length, "فشلت")}${r.added ? tile(r.added, "أُضيفت للشعبة") : ""}${r.invited ? tile(r.invited, "دعوات مرسلة") : ""}</div>` +
+                (!r.mailConfigured && $("#invite").checked ? `<p class="sub">البريد غير مُعدّ على السيرفر، استخدم روابط التفعيل.</p>` : "") +
+                (r.failed.length ? `<h4>الصفوف الفاشلة</h4><div style="overflow:auto"><table class="tbl"><tbody>${r.failed.map(f => `<tr><td>${f.row}</td><td dir="ltr">${escapeHtml(f.email || "")}</td><td>${escapeHtml(f.reason)}</td></tr>`).join("")}</tbody></table></div>` : "") +
+                (r.links.length ? `<button class="btn ghost sm" id="dlLinks" type="button" style="margin-top:10px">تحميل روابط التفعيل</button><p class="sub">أرسل كل رابط لصاحبه ليضع كلمة المرور بنفسه.</p>` : "");
+            const dl = $("#dlLinks");
+            if (dl) dl.addEventListener("click", () => download("name,email,link\n" + r.links.map(l => [l.name, l.email, l.link].map(x => '"' + String(x).replace(/"/g, '""') + '"').join(",")).join("\n"), "activation-links.csv"));
+            loadAudit();
+        } catch (e) {
+            const msg = e && e.code === "functions/permission-denied" ? "ليس لديك صلاحية المشرف"
+                : e && (e.code === "functions/not-found" || e.code === "functions/unavailable") ? "الباك اند غير منشور بعد (firebase deploy)"
+                : (e && e.message) || "تعذر الاستيراد";
+            $("#result").innerHTML = `<p class="sub" style="color:var(--bad)">${escapeHtml(msg)}</p>`;
+        }
+        goBtn.disabled = false;
+    });
+</script>
+</body>
+</html>
