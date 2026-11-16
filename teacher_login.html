@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#5b1fa8">
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="icon.svg">
-    <title>دخول المعلم</title>
+    <title>دخول المعلم والمشرف</title>
 
     <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
@@ -19,9 +19,14 @@
 
 <main class="center-page">
     <form class="card center" id="form" novalidate>
-        <div class="icon-badge">🧑‍🏫</div>
-        <h2>دخول المعلم</h2>
-        <p class="sub">سجّل دخولك لإدارة الطلاب والحضور</p>
+        <div class="icon-badge" id="badge">🧑‍🏫</div>
+        <h2 id="title">دخول المعلم</h2>
+        <p class="sub" id="subtitle">سجّل دخولك لإدارة الطلاب والحضور</p>
+
+        <div class="seg" id="roleSeg" style="margin-bottom:14px">
+            <button type="button" data-role="teacher">🧑‍🏫 معلم</button>
+            <button type="button" data-role="admin">🛡️ مشرف</button>
+        </div>
 
         <div class="field">
             <label for="email">البريد الإلكتروني</label>
@@ -50,12 +55,48 @@
 
     const form = $("#form"), btn = $("#btn"), msg = $("#msg");
 
+    /* نوع الدخول: teacher (معلم) أو admin (مشرف). يُحدَّد من الرابط ?role=admin أو من الزر */
+    let role = getParam("role") === "admin" ? "admin" : "teacher";
+
+    const ROLES = {
+        teacher: { badge: "🧑‍🏫", title: "دخول المعلم", sub: "سجّل دخولك لإدارة الطلاب والحضور", node: "teachers", to: "attendance_camera.html", ph: "teacher@university.edu" },
+        admin:   { badge: "🛡️", title: "دخول المشرف", sub: "سجّل دخولك لاستيراد الطلاب والدكاترة ومتابعة العمليات", node: "admins", to: "admin.html", ph: "admin@university.edu" }
+    };
+
+    function applyRole() {
+        const r = ROLES[role];
+        $("#badge").textContent = r.badge;
+        $("#title").textContent = r.title;
+        $("#subtitle").textContent = r.sub;
+        $("#email").placeholder = r.ph;
+        document.querySelectorAll("#roleSeg button").forEach(b => {
+            b.className = b.dataset.role === role ? "on ok" : "";
+        });
+        hideMsg(msg);
+    }
+
+    $("#roleSeg").addEventListener("click", e => {
+        const b = e.target.closest("[data-role]");
+        if (!b || b.dataset.role === role) return;
+        role = b.dataset.role;
+        applyRole();
+    });
+
+    applyRole();
+
+    /* هل هذا المستخدم مشرف؟ (admins/{uid} = true) */
+    async function isAdmin(uid) {
+        try { return (await db.ref("admins/" + uid).once("value")).val() === true; } catch (e) { return false; }
+    }
+
     if (getParam("denied")) {
         showMsg(msg, "هذا الحساب ليس حساب معلم. سجّل الدخول بحساب معلم", "err");
     } else {
-        /* إذا كان المعلم مسجلًا دخوله أصلًا نحوّله مباشرة */
+        /* إذا كان المستخدم مسجلًا دخوله أصلًا نحوّله مباشرة حسب النوع المختار */
         auth.onAuthStateChanged(async u => {
-            if (u && await isTeacher(u.uid)) location.href = "attendance_camera.html";
+            if (!u) return;
+            if (role === "admin") { if (await isAdmin(u.uid)) location.href = ROLES.admin.to; }
+            else if (await isTeacher(u.uid)) location.href = ROLES.teacher.to;
         });
     }
 
@@ -67,6 +108,7 @@
         const password = $("#password").value;
         if (!email || !password) { showMsg(msg, "اكتب البريد وكلمة المرور", "err"); return; }
 
+        const r = ROLES[role];
         setLoading(btn, true);
 
         /* الخطوة 1: تسجيل الدخول في Firebase Authentication */
@@ -80,32 +122,33 @@
             return;
         }
 
-        /* الخطوة 2: التأكد أن الحساب مضاف كمعلم في teachers/{uid} */
+        /* الخطوة 2: التأكد أن الحساب مضاف في teachers/{uid} أو admins/{uid} حسب النوع */
         let snap;
         try {
-            snap = await db.ref("teachers/" + uid).once("value");
+            snap = await db.ref(r.node + "/" + uid).once("value");
         } catch (err) {
             await auth.signOut();
             setLoading(btn, false);
-            showMsg(msg, "تم تسجيل الدخول لكن قواعد قاعدة البيانات (Rules) منعت قراءة teachers. راجع القواعد.", "err");
+            showMsg(msg, "تم تسجيل الدخول لكن قواعد قاعدة البيانات (Rules) منعت قراءة " + r.node + ". راجع القواعد.", "err");
             return;
         }
 
-        if (snap.exists()) {
-            location.href = "attendance_camera.html";
+        const ok = role === "admin" ? snap.val() === true : snap.exists();
+        if (ok) {
+            location.href = r.to;
         } else {
             await auth.signOut();
             setLoading(btn, false);
-            showUidHelp(uid);
+            showUidHelp(uid, r.node, role === "admin" ? "مشرف" : "معلم");
         }
     });
 
     /* يعرض الـ UID بخط ثابت (يميّز I و l) مع زر نسخ، عشان ما تكتبه بيدك */
-    function showUidHelp(uid) {
+    function showUidHelp(uid, node, label) {
         msg.className = "msg show err";
         msg.innerHTML =
-            `الحساب صحيح لكنه غير مضاف كمعلم.<br>أضف في Realtime Database ← Data:<br>
-             <b>teachers ← (الصق الـ UID) ← true</b>
+            `الحساب صحيح لكنه غير مضاف كـ${label}.<br>أضف في Realtime Database ← Data:<br>
+             <b>${node} ← (الصق الـ UID) ← true</b>
              <code id="uidBox" dir="ltr" style="display:block;margin:10px 0;padding:10px;border-radius:10px;background:rgba(0,0,0,.25);font-family:Consolas,'Courier New',monospace;font-size:15px;word-break:break-all;user-select:all">${escapeHtml(uid)}</code>
              <button class="btn sm" type="button" id="copyUid">📋 نسخ الـ UID</button>
              <small style="display:block;margin-top:8px;opacity:.85">عدد الأحرف: ${uid.length}</small>`;
@@ -116,11 +159,11 @@
                 toast("تم نسخ الـ UID، الصقه في خانة Name");
             } catch (e) {
                 /* إذا منع المتصفح النسخ التلقائي نحدد النص ليتم نسخه بـ Ctrl+C */
-                const r = document.createRange();
-                r.selectNodeContents($("#uidBox"));
+                const rg = document.createRange();
+                rg.selectNodeContents($("#uidBox"));
                 const s = getSelection();
                 s.removeAllRanges();
-                s.addRange(r);
+                s.addRange(rg);
                 toast("تم تحديد الـ UID، اضغط Ctrl+C");
             }
         });
